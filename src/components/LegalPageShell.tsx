@@ -59,7 +59,7 @@ export default function LegalPageShell({ title, subtitle, children }: LegalPageS
                 </nav>
 
                 <p style={{ marginTop: 14, fontSize: '0.85rem', color: 'var(--text-tertiary)' }}>
-                    {t({ de: 'Entwickelt von WAMOCON Academy GmbH in Deutschland.', en: 'Developed by WAMOCON Academy GmbH in Germany.', tr: 'WAMOCON Academy GmbH tarafından Almanya\'da geliştirilmiştir.' })}
+                    {t({ de: 'Entwickelt von WAMOCON GmbH in Deutschland.', en: 'Developed by WAMOCON GmbH in Germany.', tr: 'WAMOCON GmbH tarafından Almanya\'da geliştirilmiştir.' })}
                 </p>
             </div>
         </div>

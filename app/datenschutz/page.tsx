@@ -13,7 +13,7 @@ export default function DatenschutzPage() {
             <section>
                 <h2>1. Verantwortlicher</h2>
                 <p>
-                    Verantwortlich fuer die Datenverarbeitung ist die WAMOCON Academy GmbH als Betreiberin von
+                    Verantwortlich fuer die Datenverarbeitung ist die WAMOCON GmbH als Betreiberin von
                     Momentum Marketing OS.
                 </p>
             </section>

@@ -8,12 +8,12 @@ export default function AgbPage() {
     return (
         <LegalPageShell
             title="Allgemeine Geschaeftsbedingungen (AGB)"
-            subtitle="Nutzungsbedingungen fuer Momentum Marketing OS der WAMOCON Academy GmbH."
+            subtitle="Nutzungsbedingungen fuer Momentum Marketing OS der WAMOCON GmbH."
         >
             <section>
                 <h2>1. Geltungsbereich</h2>
                 <p>
-                    Diese AGB regeln die Nutzung der Plattform Momentum Marketing OS zwischen der WAMOCON Academy
+                    Diese AGB regeln die Nutzung der Plattform Momentum Marketing OS zwischen der WAMOCON 
                     GmbH und den registrierten Nutzerinnen und Nutzern bzw. deren Organisationen.
                 </p>
             </section>

@@ -428,7 +428,7 @@ function CreateCompanyModal({
                         <input
                             type="text"
                             className="form-input"
-                            placeholder={t({ de: 'z.B. WAMOCON Academy', en: 'e.g. WAMOCON Academy', tr: 'örn. WAMOCON Academy' })}
+                            placeholder={t({ de: 'z.B. WAMOCON ', en: 'e.g. WAMOCON ', tr: 'örn. WAMOCON ' })}
                             value={name}
                             onChange={e => setName(e.target.value)}
                             autoFocus

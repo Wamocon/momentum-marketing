@@ -302,7 +302,7 @@ export const PROJECT_QUESTIONNAIRE: QuestionnaireSection[] = [
     title: { de: 'Positionierung & Markenidentität', en: 'Positioning & Brand Identity' },
     description: { de: 'Strategische Markenpositionierung – Pflichtfelder bilden das Minimum für den AI-Prompt-Builder.', en: 'Strategic brand positioning – required fields form the minimum for the AI prompt builder.' },
     fields: [
-      { key: 'positioning.name', label: { de: 'Markenname', en: 'Brand Name' }, description: { de: 'Offizieller Markenname.', en: 'Official brand name.' }, type: 'text', required: true, example: 'WAMOCON Academy' },
+      { key: 'positioning.name', label: { de: 'Markenname', en: 'Brand Name' }, description: { de: 'Offizieller Markenname.', en: 'Official brand name.' }, type: 'text', required: true, example: 'WAMOCON' },
       { key: 'positioning.tagline', label: { de: 'Tagline / Claim', en: 'Tagline / Claim' }, description: { de: 'Kurze Markenbotschaft.', en: 'Short brand message.' }, type: 'text', required: true, example: 'Marketing. Einfach. Machen.' },
       { key: 'positioning.vision', label: { de: 'Vision', en: 'Vision' }, description: { de: 'Zukunftsbild des Unternehmens.', en: 'Future vision of the company.' }, type: 'textarea', required: true, example: 'Jedes KMU hat Zugang zu professionellem Marketing.' },
       { key: 'positioning.mission', label: { de: 'Mission', en: 'Mission' }, description: { de: 'Wofür steht das Unternehmen?', en: 'What does the company stand for?' }, type: 'textarea', required: true, example: 'Wir demokratisieren Marketing-Tools.' },

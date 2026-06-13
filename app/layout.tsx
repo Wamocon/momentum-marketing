@@ -5,7 +5,7 @@ import '@/index.css';
 
 export const metadata: Metadata = {
     title: 'Momentum | Marketing OS',
-    description: 'Momentum Marketing OS — Vom Jobsuchenden zum IT-Tester in 45 Tagen. Die offizielle Lern- und Verwaltungsplattform der WAMOCON Academy.',
+    description: 'Momentum Marketing OS — Momentum im Marketing aufbauen. Alle Marketingaktivitäten planen, steuern und dokumentieren.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

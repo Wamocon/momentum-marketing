@@ -3,7 +3,7 @@
     "title": "Momentum Marketing OS – Projekt-Fragebogen / Import-Vorlage",
     "description": "Diese Datei dient als Vorlage und Fragebogen für die Einrichtung eines neuen Marketing-Projekts in Momentum. Felder mit 'required: true' sind Pflichtfelder. Alle anderen sind optional. Füllen Sie die 'value'-Felder aus und importieren Sie die generierte JSON-Datei in Momentum unter Einstellungen → Import/Export.",
     "version": "1.0.0",
-    "app": "Momentum Marketing OS (WAMOCON Academy)",
+    "app": "Momentum Marketing OS (WAMOCON)",
     "usage": "1. Fragebogen ausfüllen (siehe Abschnitte unten). 2. Das ausgefüllte 'importData'-Objekt als eigenständige JSON-Datei speichern. 3. In Momentum importieren."
   },
 

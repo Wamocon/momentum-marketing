@@ -90,7 +90,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
             loginAction: 'Sign in',
             registerAction: 'Create account',
             registrationSuccess: 'Registration successful. Logging you in...',
-            devBy: 'Built by WAMOCON Academy GmbH.',
+            devBy: 'Built by WAMOCON GmbH.',
             errorEmailPassword: 'Please enter email and password.',
             errorName: 'Please enter your name.',
             errorPasswordLength: 'Password must be at least 8 characters long.',
@@ -135,7 +135,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
             loginAction: 'Anmelden',
             registerAction: 'Konto erstellen',
             registrationSuccess: 'Registrierung erfolgreich. Du wirst eingeloggt...',
-            devBy: 'Entwickelt von WAMOCON Academy GmbH.',
+            devBy: 'Entwickelt von WAMOCON GmbH.',
             errorEmailPassword: 'Bitte E-Mail und Passwort eingeben.',
             errorName: 'Bitte Namen eingeben.',
             errorPasswordLength: 'Das Passwort muss mindestens 8 Zeichen lang sein.',
@@ -180,7 +180,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
             loginAction: 'Giriş yap',
             registerAction: 'Hesap oluştur',
             registrationSuccess: 'Kayıt başarılı. Giriş yapılıyor...',
-            devBy: 'WAMOCON Academy GmbH tarafından geliştirilmiştir.',
+            devBy: 'WAMOCON GmbH tarafından geliştirilmiştir.',
             errorEmailPassword: 'Lütfen e-posta ve şifre girin.',
             errorName: 'Lütfen adınızı girin.',
             errorPasswordLength: 'Şifre en az 8 karakter uzunluğunda olmalıdır.',
@@ -314,7 +314,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '28px' }}>
                         <div className="sidebar-logo" style={{ width: 44, height: 44, fontSize: '1.25rem' }}>M</div>
                         <div>
-                            <div className="sidebar-brand-name" style={{ fontSize: '1.25rem' }}>WAMOCON Academy</div>
+                            <div className="sidebar-brand-name" style={{ fontSize: '1.25rem' }}>MOMENTUM Marketing</div>
                         </div>
                     </div>
 
