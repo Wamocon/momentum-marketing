@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import LoginPage from '@/views/LoginPage';
 
 export default function LoginRoute() {
-    const { currentUser, sessionLoading, login } = useAuth();
+    const { currentUser, sessionLoading } = useAuth();
     const router = useRouter();
 
     // If already logged in, redirect to dashboard
@@ -43,5 +43,5 @@ export default function LoginRoute() {
         return null; // Will redirect via useEffect
     }
 
-    return <LoginPage onLogin={login} />;
+    return <LoginPage />;
 }

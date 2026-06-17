@@ -67,6 +67,7 @@ export default function ContentDetailModal({
   const [linkedSocialPosts, setLinkedSocialPosts] = useState<ScheduledPost[]>(
     [],
   );
+  const [error, setError] = useState<string | null>(null);
   const hasUnsavedEdits =
     isEditing && JSON.stringify(edited) !== JSON.stringify(content);
   const hasUnsavedNewTask = Boolean(
@@ -134,7 +135,6 @@ export default function ContentDetailModal({
 
   useEffect(() => {
     if (!canSocialHub || !activeCompany?.id || !isSocialContent) {
-      setLinkedSocialPosts([]);
       return;
     }
     let cancelled = false;
@@ -150,46 +150,56 @@ export default function ContentDetailModal({
       })
       .catch(() => {
         if (!cancelled) {
-          setLinkedSocialPosts([]);
+          setError(t({ de: 'Social-Hub-Posts konnten nicht geladen werden.', en: 'Could not load Social Hub posts.', tr: 'Social Hub gönderileri yüklenemedi.' }));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [activeCompany?.id, canSocialHub, content.id, isSocialContent]);
+  }, [activeCompany?.id, canSocialHub, content.id, isSocialContent, t]);
 
-  const handleSave = () => {
-    updateContent(content.id, edited);
-    setIsEditing(false);
-    onClose();
+  const handleSave = async () => {
+    try {
+      setError(null);
+      await updateContent(content.id, edited);
+      setIsEditing(false);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t({ de: 'Speichern fehlgeschlagen.', en: 'Save failed.', tr: 'Kaydetme başarısız.' }));
+    }
   };
 
-  const handleAddTask = () => {
+  const handleAddTask = async () => {
     if (!newTaskTitle.trim()) return;
     const taskId = "t" + Date.now();
-    addTask({
-      id: taskId,
-      title: newTaskTitle,
-      status: "draft",
-      assignee: newTaskAssignee || "",
-      author: currentUser?.name || "System",
-      dueDate: content.publishDate || "",
-      publishDate: null,
-      platform: newTaskPlatform || null,
-      type: "Task",
-      oneDriveLink: "",
-      description: `Aufgabe für Content "${content.title}".`,
-      campaignId: content.campaignId || null,
-      scope: "single",
-    });
-    // Link the task to this content
-    updateContent(content.id, {
-      taskIds: [...(content.taskIds || []), taskId],
-    });
-    setNewTaskTitle("");
-    setNewTaskPlatform(content.platform || "");
-    setNewTaskAssignee("");
-    setShowNewTask(false);
+    try {
+      setError(null);
+      addTask({
+        id: taskId,
+        title: newTaskTitle,
+        status: "draft",
+        assignee: newTaskAssignee || "",
+        author: currentUser?.name || "System",
+        dueDate: content.publishDate || "",
+        publishDate: null,
+        platform: newTaskPlatform || null,
+        type: "Task",
+        oneDriveLink: "",
+        description: `Aufgabe für Content "${content.title}".`,
+        campaignId: content.campaignId || null,
+        scope: "single",
+      });
+      // Link the task to this content
+      await updateContent(content.id, {
+        taskIds: [...(content.taskIds || []), taskId],
+      });
+      setNewTaskTitle("");
+      setNewTaskPlatform(content.platform || "");
+      setNewTaskAssignee("");
+      setShowNewTask(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t({ de: 'Aufgabe konnte nicht verknüpft werden.', en: 'Could not link task.', tr: 'Görev bağlanamadı.' }));
+    }
   };
 
   if (!content) return null;
@@ -271,6 +281,18 @@ export default function ContentDetailModal({
             </button>
           </div>
         </div>
+
+        {error && (
+          <div style={{
+            padding: '10px 16px',
+            background: 'rgba(239,68,68,0.1)',
+            borderBottom: '1px solid rgba(239,68,68,0.25)',
+            color: '#ef4444',
+            fontSize: 'var(--font-size-xs)',
+          }}>
+            {error}
+          </div>
+        )}
 
         {/* BODY */}
         <div

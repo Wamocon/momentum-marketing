@@ -31,9 +31,13 @@ interface PricingCardsProps {
   compact?: boolean;
   /** Highlight a specific plan slug. */
   highlightSlug?: PlanSlug;
+  /** If set, the matching plan is shown as "requested" and disabled. */
+  requestedPlanId?: string | null;
+  /** If true, plan selection creates a request instead of an immediate change. */
+  requestMode?: boolean;
 }
 
-export default function PricingCards({ onSelect, compact, highlightSlug }: PricingCardsProps) {
+export default function PricingCards({ onSelect, compact, highlightSlug, requestedPlanId, requestMode }: PricingCardsProps) {
   const { language, t } = useLanguage();
   const { plans, currentPlanSlug, loading } = useSubscription();
   const [changingPlanId, setChangingPlanId] = useState<string | null>(null);
@@ -69,6 +73,7 @@ export default function PricingCards({ onSelect, compact, highlightSlug }: Prici
         const accent = PLAN_ACCENT[plan.slug] ?? 'var(--color-neutral)';
         const isHighlighted = plan.slug === highlight;
         const isCurrent = plan.slug === currentPlanSlug;
+        const isRequested = requestMode && requestedPlanId === plan.id;
         const canSelect = planTierOrder(plan.slug) !== planTierOrder(currentPlanSlug);
         const isUpgrade = planTierOrder(plan.slug) > planTierOrder(currentPlanSlug);
         const highlights = getPlanHighlights(plan, language === 'en' ? 'en' : language === 'tr' ? 'de' : 'de');
@@ -117,15 +122,18 @@ export default function PricingCards({ onSelect, compact, highlightSlug }: Prici
               </div>
             )}
 
-            {/* Current badge */}
-            {isCurrent && (
+            {/* Current / Requested badge */}
+            {(isCurrent || isRequested) && (
               <div style={{
                 position: 'absolute', top: compact ? '8px' : '12px', right: compact ? '8px' : '12px',
-                background: 'rgba(16,185,129,0.12)', color: '#10b981',
+                background: isRequested ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)',
+                color: isRequested ? '#b45309' : '#10b981',
                 fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
                 padding: '2px 8px', borderRadius: 'var(--radius-full)',
               }}>
-                {t({ de: 'Aktuell', en: 'Current', tr: 'Mevcut' })}
+                {isRequested
+                  ? t({ de: 'Angefordert', en: 'Requested', tr: 'Talep edildi' })
+                  : t({ de: 'Aktuell', en: 'Current', tr: 'Mevcut' })}
               </div>
             )}
 
@@ -211,7 +219,7 @@ export default function PricingCards({ onSelect, compact, highlightSlug }: Prici
             {onSelect && (
               <button
                 className={`btn ${isUpgrade ? 'btn-primary' : isCurrent ? 'btn-ghost' : 'btn-secondary'}`}
-                disabled={isCurrent || isChanging}
+                disabled={isCurrent || isChanging || isRequested}
                 onClick={() => handleSelect(plan)}
                 style={{
                   width: '100%',
@@ -222,14 +230,16 @@ export default function PricingCards({ onSelect, compact, highlightSlug }: Prici
                 }}
               >
                 {isChanging
-                  ? t({ de: 'Wird gewechselt...', en: 'Switching...', tr: 'Değiştiriliyor...' })
-                  : isCurrent
-                    ? t({ de: 'Aktueller Plan', en: 'Current plan', tr: 'Mevcut plan' })
-                    : isUpgrade
-                      ? <>
-                          {t({ de: 'Upgraden', en: 'Upgrade', tr: 'Yükselt' })} <ArrowRight size={14} />
-                        </>
-                      : t({ de: 'Wechseln', en: 'Switch', tr: 'Değiştir' })
+                  ? t({ de: requestMode ? 'Wird angefordert...' : 'Wird gewechselt...', en: requestMode ? 'Requesting...' : 'Switching...', tr: requestMode ? 'Talep ediliyor...' : 'Değiştiriliyor...' })
+                  : isRequested
+                    ? t({ de: 'Angefordert', en: 'Requested', tr: 'Talep edildi' })
+                    : isCurrent
+                      ? t({ de: 'Aktueller Plan', en: 'Current plan', tr: 'Mevcut plan' })
+                      : isUpgrade
+                        ? <>
+                            {t({ de: requestMode ? 'Anfordern' : 'Upgraden', en: requestMode ? 'Request' : 'Upgrade', tr: requestMode ? 'Talep Et' : 'Yükselt' })} <ArrowRight size={14} />
+                          </>
+                        : t({ de: requestMode ? 'Anfordern' : 'Wechseln', en: requestMode ? 'Request' : 'Switch', tr: requestMode ? 'Talep Et' : 'Değiştir' })
                 }
               </button>
             )}

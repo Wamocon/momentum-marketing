@@ -9,7 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   CREATIVE_STATES,
   CreativeCard,
@@ -31,6 +31,7 @@ import { useTasks } from "../context/TaskContext";
 import { useProjectRouter } from "../hooks/useProjectRouter";
 import { CONTENT_TYPE_COLORS } from "../lib/constants";
 import { hasSocialHubPlanEntitlement } from "../lib/socialHubEntitlements";
+import { downloadCampaignExport } from "../lib/importExport";
 import type { ContentItem, Task } from "../types";
 
 import {
@@ -54,6 +55,7 @@ export default function CampaignDetailPage() {
     users: testUsers,
     touchpoints,
     deleteCampaign,
+    updateCampaign,
     loading,
   } = useData();
   const canDelete = can("canDeleteItems");
@@ -72,6 +74,14 @@ export default function CampaignDetailPage() {
 
   // ─── Tabs ───
   const [activeTab, setActiveTab] = useState("overview");
+
+  // ─── Team edit trigger ───
+  const teamSectionRef = useRef<HTMLDivElement>(null);
+  const [teamEditPulse, setTeamEditPulse] = useState(0);
+  const handleEditTeam = () => {
+    setActiveTab("overview");
+    setTeamEditPulse((p) => p + 1);
+  };
 
   // ─── Master Prompt ───
   const [masterPromptExpanded, setMasterPromptExpanded] = useState(false);
@@ -94,6 +104,7 @@ export default function CampaignDetailPage() {
   const [showNewCampaignContent, setShowNewCampaignContent] = useState(false);
 
   const [showNewCreativeModal, setShowNewCreativeModal] = useState(false);
+  const [showActionMenu, setShowActionMenu] = useState(false);
   const [newCreative, setNewCreative] = useState({
     title: "",
     platform: "",
@@ -137,11 +148,27 @@ export default function CampaignDetailPage() {
     setShowNewCreativeModal(false);
   };
 
-  const addKeyword = () => {
-    if (newKw.trim() && !kwList.includes(newKw.trim())) {
-      setKwList([...kwList, newKw.trim()]);
+  const addKeyword = async () => {
+    const term = newKw.trim();
+    if (!term || kwList.includes(term)) return;
+    const next = [...kwList, term];
+    try {
+      await updateCampaign(campaign!.id, { campaignKeywords: next });
+      setKwList(next);
       setNewKw("");
       setAddingKw(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Keyword konnte nicht gespeichert werden.");
+    }
+  };
+
+  const removeKeyword = async (term: string) => {
+    const next = kwList.filter(k => k !== term);
+    try {
+      await updateCampaign(campaign!.id, { campaignKeywords: next });
+      setKwList(next);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Keyword konnte nicht entfernt werden.");
     }
   };
 
@@ -291,12 +318,49 @@ export default function CampaignDetailPage() {
                 <Trash2 size={16} /> {t({ de: "Löschen", en: "Delete", tr: "Sil" })}
               </button>
             )}
-            <button className="btn btn-secondary">
+            <button className="btn btn-secondary" onClick={handleEditTeam}>
               <Edit size={16} /> {t({ de: "Bearbeiten", en: "Edit", tr: "Düzenle" })}
             </button>
-            <button className="btn btn-ghost btn-icon">
-              <MoreVertical size={16} />
-            </button>
+            <div style={{ position: "relative" }}>
+              <button
+                className="btn btn-ghost btn-icon"
+                onClick={() => setShowActionMenu(v => !v)}
+                aria-haspopup="menu"
+                aria-expanded={showActionMenu}
+              >
+                <MoreVertical size={16} />
+              </button>
+              {showActionMenu && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 8px)",
+                    right: 0,
+                    minWidth: "180px",
+                    background: "var(--bg-surface)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "var(--radius-md)",
+                    boxShadow: "var(--shadow-lg)",
+                    zIndex: 50,
+                    padding: "6px",
+                  }}
+                  role="menu"
+                >
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ width: "100%", justifyContent: "flex-start" }}
+                    onClick={() => {
+                      downloadCampaignExport(campaign);
+                      setShowActionMenu(false);
+                    }}
+                    role="menuitem"
+                  >
+                    <Share2 size={14} style={{ marginRight: "8px" }} />{" "}
+                    {t({ de: "Exportieren", en: "Export", tr: "Dışa Aktar" })}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -376,12 +440,15 @@ export default function CampaignDetailPage() {
           addingKw={addingKw}
           setAddingKw={setAddingKw}
           addKeyword={addKeyword}
+          removeKeyword={removeKeyword}
           masterPromptExpanded={masterPromptExpanded}
           setMasterPromptExpanded={setMasterPromptExpanded}
           promptEditMode={promptEditMode}
           setPromptEditMode={setPromptEditMode}
           promptValue={promptValue}
           setPromptValue={setPromptValue}
+          teamSectionRef={teamSectionRef}
+          teamEditPulse={teamEditPulse}
         />
       )}
       {activeTab === "creatives" && (

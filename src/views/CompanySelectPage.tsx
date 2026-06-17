@@ -2,6 +2,7 @@
 
 import { useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
     Building2, Plus, ArrowRight, Shield, Crown,
     Users2, Settings, Trash2, Search, X,
@@ -100,7 +101,7 @@ export default function CompanySelectPage() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                     {isSuperAdmin && (
-                        <a href="/admin" style={{
+                        <Link href="/admin" style={{
                             display: 'flex', alignItems: 'center', gap: '6px',
                             padding: '6px 14px', borderRadius: 'var(--radius-md)',
                             background: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b',
@@ -108,7 +109,7 @@ export default function CompanySelectPage() {
                             textDecoration: 'none', border: '1px solid rgba(245, 158, 11, 0.25)',
                         }}>
                             <Shield size={14} /> Super-Admin
-                        </a>
+                        </Link>
                     )}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <div style={{

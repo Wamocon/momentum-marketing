@@ -51,11 +51,11 @@ export default function DashboardPage() {
                     </PageHelp>
                     <button className="btn btn-secondary" onClick={() => router.push('/campaigns')}>{t({ de: 'Neue Kampagne', en: 'New campaign', tr: 'Yeni kampanya' })}</button>
                     {role === 'manager' || role === 'company_admin' ? (
-                        <button className="btn btn-primary" onClick={() => router.push('/calendar')}>
+                        <button className="btn btn-primary" onClick={() => router.push('/content')}>
                             <Megaphone size={16} /> {t({ de: 'Content Kalender', en: 'Content calendar', tr: 'İçerik takvimi' })}
                         </button>
                     ) : (
-                        <button className="btn btn-primary" onClick={() => router.push('/calendar')}>
+                        <button className="btn btn-primary" onClick={() => router.push('/tasks')}>
                             <Megaphone size={16} /> {t({ de: 'Meine To-Dos', en: 'My tasks', tr: 'Görevlerim' })}
                         </button>
                     )}

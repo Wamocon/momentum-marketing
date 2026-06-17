@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
     Settings, Users, Plug, Bell, Shield, CreditCard, FileJson,
     Plus, Check, X, Lock, Trash2, ExternalLink, BookOpen, Clock,
@@ -15,7 +15,7 @@ import ImportExportPanel from '../components/ImportExportPanel';
 import PricingCards from '../components/PricingCards';
 import { downloadProjectExport } from '../lib/importExport';
 import type { ProjectExportData } from '../types/importExport';
-import { NOTIFICATION_SETTING_TYPE_MAP, type NotificationType } from '../types';
+import { NOTIFICATION_SETTING_TYPE_MAP, type NotificationType, type Organisation } from '../types';
 import { formatPrice } from '../lib/pricing';
 
 import { AdminSettings } from '../components/SettingsAdmin';
@@ -268,11 +268,11 @@ export default function SettingsPage() {
         activeCompany,
         companyMembers,
         updateCompany,
-        addMember,
         updateMemberRole,
         removeMember,
+        refreshMembers,
     } = useCompany();
-    const { subscription, currentPlan, changePlan, loading: subLoading } = useSubscription();
+    const { subscription, currentPlan, changePlan, loading: subLoading, plans } = useSubscription();
     const [activeTab, setActiveTab] = useState(() => {
         // Check URL for ?tab=subscription
         if (typeof window !== 'undefined') {
@@ -283,6 +283,8 @@ export default function SettingsPage() {
     });
     const [wsName, setWsName] = useState('');
     const [wsDesc, setWsDesc] = useState('');
+    const [currency, setCurrency] = useState('EUR');
+    const [timezone, setTimezone] = useState('Europe/Berlin');
     const [savedMsg, setSavedMsg] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
     const [inviteEmail, setInviteEmail] = useState('');
@@ -294,12 +296,34 @@ export default function SettingsPage() {
     const [generalLanguage, setGeneralLanguage] = useState<AppLanguage>(language);
     const [languageSavedMsg, setLanguageSavedMsg] = useState('');
     const [guideModal, setGuideModal] = useState<IntegrationConfig | null>(null);
+    const [organisation, setOrganisation] = useState<Organisation | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (activeCompany?.organisationId) {
+            api.fetchOrganisationById(activeCompany.organisationId)
+                .then(org => { if (!cancelled) setOrganisation(org); })
+                .catch(console.error);
+        } else {
+            setOrganisation(null);
+        }
+        return () => { cancelled = true; };
+    }, [activeCompany?.organisationId]);
+
+    const requestedPlan = useMemo(() => {
+        if (!organisation?.requestedPlanId || !plans) return null;
+        return plans.find(p => p.id === organisation.requestedPlanId) ?? null;
+    }, [organisation?.requestedPlanId, plans]);
 
     useEffect(() => {
         setWsName(activeCompany?.name ?? '');
         setWsDesc(activeCompany?.description ?? '');
         setSavedMsg('');
         setErrorMsg('');
+        if (activeCompany) {
+            setCurrency(localStorage.getItem(`momentum_currency:${activeCompany.id}`) || 'EUR');
+            setTimezone(localStorage.getItem(`momentum_timezone:${activeCompany.id}`) || 'Europe/Berlin');
+        }
     }, [activeCompany]);
 
     useEffect(() => {
@@ -356,6 +380,7 @@ export default function SettingsPage() {
         return () => {
             cancelled = true;
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeCompany?.id, currentUser?.id]);
 
     useEffect(() => {
@@ -376,6 +401,8 @@ export default function SettingsPage() {
                 description: wsDesc.trim(),
                 slug: trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
             });
+            localStorage.setItem(`momentum_currency:${activeCompany.id}`, currency);
+            localStorage.setItem(`momentum_timezone:${activeCompany.id}`, timezone);
             setSavedMsg(t({ de: 'Projektdaten gespeichert.', en: 'Project data saved.', tr: 'Proje verileri kaydedildi.' }));
             setTimeout(() => setSavedMsg(''), 3000);
         } catch {
@@ -386,6 +413,10 @@ export default function SettingsPage() {
     const handleDiscardSettings = () => {
         setWsName(activeCompany?.name ?? '');
         setWsDesc(activeCompany?.description ?? '');
+        if (activeCompany) {
+            setCurrency(localStorage.getItem(`momentum_currency:${activeCompany.id}`) || 'EUR');
+            setTimezone(localStorage.getItem(`momentum_timezone:${activeCompany.id}`) || 'Europe/Berlin');
+        }
         setErrorMsg('');
     };
 
@@ -424,24 +455,17 @@ export default function SettingsPage() {
             setInviteLoading(true);
             setErrorMsg('');
 
-            const user = await api.fetchUserByEmail(normalizedEmail);
-            if (!user) {
-                setErrorMsg(t({ de: 'Benutzer nicht gefunden. Bitte Benutzer zuerst anlegen und dann erneut zuweisen.', en: 'User not found. Please create the user first, then assign again.', tr: 'Kullanıcı bulunamadı. Lütfen önce kullanıcıyı oluşturun ve tekrar atayın.' }));
-                return;
-            }
-
-            const alreadyAssigned = companyMembers.some(member => member.userId === user.id);
-            if (alreadyAssigned) {
-                setErrorMsg(t({ de: 'Dieser Benutzer ist dem Projekt bereits zugewiesen.', en: 'This user is already assigned to the project.', tr: 'Bu kullanıcı projeye zaten atanmış.' }));
-                return;
-            }
-
-            await addMember(user.id, 'member');
+            const result = await api.inviteUserByEmail(normalizedEmail, activeCompany.id, 'member');
             setInviteEmail('');
-            setSavedMsg(t({ de: `Benutzer ${user.name} wurde als Member zugewiesen.`, en: `User ${user.name} has been assigned as member.`, tr: `${user.name} kullanıcısı üye olarak atandı.` }));
-            setTimeout(() => setSavedMsg(''), 3000);
-        } catch {
-            setErrorMsg(t({ de: 'Benutzer konnte nicht zugewiesen werden. Bitte erneut versuchen.', en: 'Could not assign user. Please try again.', tr: 'Kullanıcı atanamadı. Lütfen tekrar deneyin.' }));
+            if (result.isNew && result.tempPassword) {
+                setSavedMsg(t({ de: `Neuer Benutzer ${result.user.name} wurde erstellt und als Member zugewiesen.`, en: `New user ${result.user.name} was created and assigned as member.`, tr: `Yeni kullanıcı ${result.user.name} oluşturuldu ve üye olarak atandı.` }));
+            } else {
+                setSavedMsg(t({ de: `Benutzer ${result.user.name} wurde als Member zugewiesen.`, en: `User ${result.user.name} has been assigned as member.`, tr: `${result.user.name} kullanıcısı üye olarak atandı.` }));
+            }
+            await refreshMembers();
+            setTimeout(() => setSavedMsg(''), 5000);
+        } catch (err) {
+            setErrorMsg(err instanceof Error ? err.message : t({ de: 'Benutzer konnte nicht zugewiesen werden. Bitte erneut versuchen.', en: 'Could not assign user. Please try again.', tr: 'Kullanıcı atanamadı. Lütfen tekrar deneyin.' }));
         } finally {
             setInviteLoading(false);
         }
@@ -509,11 +533,11 @@ export default function SettingsPage() {
                     <p className="page-subtitle">{t({ de: 'Workspace- und Kontoeinstellungen verwalten', en: 'Manage workspace and account settings', tr: 'Çalışma alanı ve hesap ayarlarını yönetin' })}</p>
                 </div>
                 <PageHelp title={t({ de: 'Einstellungen & Benutzerverwaltung', en: 'Settings & user management', tr: 'Ayarlar ve kullanıcı yönetimi' })}>
-                    <p><strong>{t({ de: 'Team-Zuweisung per E-Mail (Admin):', en: 'Team assignment via email (Admin):', tr: 'E-posta ile takım ataması (Yönetici):' })}</strong> {t({ de: 'Im Tab "Team-Übersicht" kannst du bestehende Benutzer per E-Mail dem aktiven Projekt zuweisen.', en: 'In the "Team overview" tab you can assign existing users to the active project via email.', tr: '"Takım genel bakışı" sekmesinde mevcut kullanıcıları e-posta ile aktif projeye atayabilirsiniz.' })}</p>
+                    <p><strong>{t({ de: 'Team-Zuweisung per E-Mail (Admin):', en: 'Team assignment via email (Admin):', tr: 'E-posta ile takım ataması (Yönetici):' })}</strong> {t({ de: 'Im Tab "Team-Übersicht" kannst du Benutzer per E-Mail dem aktiven Projekt zuweisen. Bei unbekannter E-Mail wird ein neuer Account erstellt.', en: 'In the "Team overview" tab you can assign users to the active project via email. If the email is unknown, a new account is created.', tr: '"Takım genel bakışı" sekmesinde kullanıcıları e-posta ile aktif projeye atayabilirsiniz. E-posta bilinmiyorsa yeni bir hesap oluşturulur.' })}</p>
                     <ul style={{ marginTop: '8px', paddingLeft: '18px' }}>
-                        <li>{t({ de: 'Es werden nur bereits angelegte Benutzer akzeptiert.', en: 'Only already created users are accepted.', tr: 'Yalnızca önceden oluşturulmuş kullanıcılar kabul edilir.' })}</li>
-                        <li>{t({ de: 'Bei erfolgreicher Zuweisung wird automatisch die Rolle', en: 'On successful assignment, the role', tr: 'Başarılı atamada otomatik olarak' })} <strong>Member</strong> {t({ de: 'vergeben.', en: 'is automatically assigned.', tr: 'rolü verilir.' })}</li>
-                        <li>{t({ de: 'Existiert die E-Mail nicht, erscheint eine Fehlermeldung mit Hinweis zur Benutzeranlage.', en: 'If the email does not exist, an error message with instructions for user creation appears.', tr: 'E-posta mevcut değilse, kullanıcı oluşturma talimatıyla bir hata mesajı görünür.' })}</li>
+                        <li>{t({ de: 'Jeder Plan enthält 1 Admin plus die angegebene Anzahl an Usern (z. B. Starter = 1 Admin + 2 User = 3 Plätze).', en: 'Each plan includes 1 admin plus the stated number of users (e.g. Starter = 1 admin + 2 users = 3 seats).', tr: 'Her plan 1 yönetici ve belirtilen kullanıcı sayısını içerir (örn. Starter = 1 yönetici + 2 kullanıcı = 3 koltuk).' })}</li>
+                        <li>{t({ de: 'Neue Zuweisungen erfolgen standardmäßig mit der Rolle', en: 'New assignments default to the role', tr: 'Yeni atamalar varsayılan olarak' })} <strong>Member</strong> {t({ de: 'vergeben.', en: 'is automatically assigned.', tr: 'rolü verilir.' })}</li>
+                        <li>{t({ de: 'Bei Erreichen des Platzlimits muss zuerst ein Upgrade angefordert werden.', en: 'When the seat limit is reached, an upgrade must be requested first.', tr: 'Koltuk limitine ulaşıldığında önce yükseltme talep edilmelidir.' })}</li>
                         <li>{t({ de: 'Rollen können danach in der Teamliste angepasst werden.', en: 'Roles can be adjusted afterwards in the team list.', tr: 'Roller daha sonra takım listesinde ayarlanabilir.' })}</li>
                     </ul>
                     <p style={{ marginTop: '12px' }}><strong>{t({ de: 'Benachrichtigungen:', en: 'Notifications:', tr: 'Bildirimler:' })}</strong></p>
@@ -615,16 +639,18 @@ export default function SettingsPage() {
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t({ de: 'Standard-Währung', en: 'Default currency', tr: 'Varsayılan para birimi' })}</label>
-                                <select className="form-select" disabled={!can('canManageSettings') || !activeCompany}>
-                                    <option>EUR (€)</option><option>USD ($)</option><option>CHF (CHF)</option>
+                                <select className="form-select" value={currency} onChange={e => setCurrency(e.target.value)} disabled={!can('canManageSettings') || !activeCompany}>
+                                    <option value="EUR">EUR (€)</option>
+                                    <option value="USD">USD ($)</option>
+                                    <option value="CHF">CHF (CHF)</option>
                                 </select>
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t({ de: 'Zeitzone', en: 'Timezone', tr: 'Saat dilimi' })}</label>
-                                <select className="form-select" disabled={!can('canManageSettings') || !activeCompany}>
-                                    <option>Europe/Berlin (UTC+1)</option>
-                                    <option>Europe/Zurich (UTC+1)</option>
-                                    <option>Europe/Vienna (UTC+1)</option>
+                                <select className="form-select" value={timezone} onChange={e => setTimezone(e.target.value)} disabled={!can('canManageSettings') || !activeCompany}>
+                                    <option value="Europe/Berlin">Europe/Berlin (UTC+1)</option>
+                                    <option value="Europe/Zurich">Europe/Zurich (UTC+1)</option>
+                                    <option value="Europe/Vienna">Europe/Vienna (UTC+1)</option>
                                 </select>
                             </div>
 
@@ -716,7 +742,7 @@ export default function SettingsPage() {
                                     color: 'var(--text-tertiary)',
                                     fontSize: 'var(--font-size-xs)',
                                 }}>
-                                    {t({ de: 'Nur vorhandene Benutzer können per E-Mail zugewiesen werden. Neue Zuweisungen erfolgen standardmäßig mit der Rolle Member.', en: 'Only existing users can be assigned via email. New assignments default to the Member role.', tr: 'Yalnızca mevcut kullanıcılar e-posta ile atanabilir. Yeni atamalar varsayılan olarak Üye rolüyle yapılır.' })}
+                                    {t({ de: `Bei unbekannter E-Mail wird ein neuer Account erstellt. Plätze: ${companyMembers.length} / ${currentPlan?.maxSeats ?? '-'} (1 Admin + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} User).`, en: `If the email is unknown, a new account is created. Seats: ${companyMembers.length} / ${currentPlan?.maxSeats ?? '-'} (1 admin + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} users).`, tr: `E-posta bilinmiyorsa yeni bir hesap oluşturulur. Koltuklar: ${companyMembers.length} / ${currentPlan?.maxSeats ?? '-'} (1 yönetici + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} kullanıcı).` })}
                                 </div>
                             )}
                             <div className="table-container">
@@ -1027,6 +1053,20 @@ export default function SettingsPage() {
                                             <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-tertiary)', marginBottom: '12px' }}>
                                                 {currentPlan.description}
                                             </div>
+                                            {requestedPlan && (
+                                                <div style={{
+                                                    marginBottom: '12px',
+                                                    padding: '10px 14px',
+                                                    borderRadius: 'var(--radius-md)',
+                                                    background: 'rgba(245,158,11,0.1)',
+                                                    border: '1px solid rgba(245,158,11,0.25)',
+                                                    color: '#b45309',
+                                                    fontSize: 'var(--font-size-sm)',
+                                                }}>
+                                                    <strong>{t({ de: 'Planwechsel angefordert:', en: 'Plan change requested:', tr: 'Plan değişikliği talep edildi:' })}</strong> {requestedPlan.name}<br />
+                                                    {t({ de: 'Der Wechsel wird erst nach Freigabe durch einen Super Admin aktiv.', en: 'The change will only become active after approval by a Super Admin.', tr: 'Değişiklik, bir Süper Yönetici onayladıktan sonra aktif olacaktır.' })}
+                                                </div>
+                                            )}
                                             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
                                                 <div style={{ background: 'var(--bg-hover)', borderRadius: 'var(--radius-md)', padding: '10px 14px' }}>
                                                     <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>{t({ de: 'Preis', en: 'Price', tr: 'Fiyat' })}</div>
@@ -1038,6 +1078,9 @@ export default function SettingsPage() {
                                                     <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>{t({ de: 'Plätze', en: 'Seats', tr: 'Koltuklar' })}</div>
                                                     <div style={{ fontSize: 'var(--font-size-lg)', fontWeight: 700 }}>
                                                         {companyMembers.length} / {currentPlan.maxSeats}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
+                                                        {t({ de: `1 Admin + ${Math.max(0, currentPlan.maxSeats - 1)} User`, en: `1 admin + ${Math.max(0, currentPlan.maxSeats - 1)} users`, tr: `1 yönetici + ${Math.max(0, currentPlan.maxSeats - 1)} kullanıcı` })}
                                                     </div>
                                                 </div>
                                                 <div style={{ background: 'var(--bg-hover)', borderRadius: 'var(--radius-md)', padding: '10px 14px' }}>
@@ -1068,12 +1111,18 @@ export default function SettingsPage() {
                                     <div className="card-title">{t({ de: 'Verfügbare Pläne', en: 'Available plans', tr: 'Mevcut planlar' })}</div>
                                 </div>
                                 <PricingCards
+                                    requestedPlanId={organisation?.requestedPlanId}
+                                    requestMode
                                     onSelect={async (plan) => {
                                         try {
                                             setErrorMsg('');
                                             await changePlan(plan.id);
-                                            setSavedMsg(t({ de: 'Plan erfolgreich gewechselt.', en: 'Plan changed successfully.', tr: 'Plan başarıyla değiştirildi.' }));
-                                            setTimeout(() => setSavedMsg(''), 3000);
+                                            if (isSuperAdmin) {
+                                                setSavedMsg(t({ de: 'Plan erfolgreich gewechselt.', en: 'Plan changed successfully.', tr: 'Plan başarıyla değiştirildi.' }));
+                                            } else {
+                                                setSavedMsg(t({ de: `Planwechsel zu ${plan.name} angefordert. Warte auf Freigabe durch Super Admin.`, en: `Plan change to ${plan.name} requested. Awaiting Super Admin approval.`, tr: `${plan.name} plan değişikliği talep edildi. Süper Yönetici onayı bekleniyor.` }));
+                                            }
+                                            setTimeout(() => setSavedMsg(''), 5000);
                                         } catch {
                                             setErrorMsg(t({ de: 'Planwechsel fehlgeschlagen. Bitte erneut versuchen.', en: 'Failed to change plan. Please try again.', tr: 'Plan değişikliği başarısız. Lütfen tekrar deneyin.' }));
                                         }

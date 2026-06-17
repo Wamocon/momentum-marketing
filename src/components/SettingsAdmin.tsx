@@ -1,8 +1,9 @@
 import type { CSSProperties } from 'react';
 import { useState } from 'react';
 import type { User } from '../types';
-import { Shield, Plus, Trash2 } from 'lucide-react';
+import { Shield, Plus, Trash2, RefreshCw } from 'lucide-react';
 import { useCompany } from '../context/CompanyContext';
+import { useSubscription } from '../context/SubscriptionContext';
 import { ROLE_CONFIG, useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import * as api from '../lib/api';
@@ -15,11 +16,14 @@ interface AdminSettingsProps {
 export function AdminSettings({ currentUser, statusDot }: AdminSettingsProps) {
     const { t } = useLanguage();
     const { can, isSuperAdmin } = useAuth();
-    const { companyMembers, addMember, updateMemberRole, removeMember } = useCompany();
+    const { activeCompany, companyMembers, updateMemberRole, removeMember, refreshMembers } = useCompany();
+    const { currentPlan } = useSubscription();
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [inviteEmail, setInviteEmail] = useState('');
     const [inviteLoading, setInviteLoading] = useState(false);
+    const [inviteTempPassword, setInviteTempPassword] = useState<string | null>(null);
+    const [refreshing, setRefreshing] = useState(false);
 
     if (!can('canManageUsers')) {
         return null;
@@ -49,6 +53,7 @@ export function AdminSettings({ currentUser, statusDot }: AdminSettingsProps) {
     };
 
     const handleInviteByEmail = async () => {
+        if (!activeCompany) return;
         const normalizedEmail = inviteEmail.trim().toLowerCase();
         if (!normalizedEmail || !normalizedEmail.includes('@')) {
             setError(t({ de: 'Bitte eine gültige E-Mail-Adresse eingeben.', en: 'Please enter a valid email address.', tr: 'Lütfen geçerli bir e-posta adresi girin.' }));
@@ -57,21 +62,18 @@ export function AdminSettings({ currentUser, statusDot }: AdminSettingsProps) {
         try {
             setInviteLoading(true);
             setError('');
-            const user = await api.fetchUserByEmail(normalizedEmail);
-            if (!user) {
-                setError(t({ de: 'Benutzer nicht gefunden. Bitte Benutzer zuerst anlegen und erneut zuweisen.', en: 'User not found. Please create the user first and reassign.', tr: 'Kullanıcı bulunamadı. Lütfen önce kullanıcıyı oluşturun ve tekrar atayın.' }));
-                return;
-            }
-            if (companyMembers.some(member => member.userId === user.id)) {
-                setError(t({ de: 'Dieser Benutzer ist bereits Mitglied im Projekt.', en: 'This user is already a member of the project.', tr: 'Bu kullanıcı zaten projenin bir üyesi.' }));
-                return;
-            }
-            await addMember(user.id, 'member');
+            setInviteTempPassword(null);
+            const result = await api.inviteUserByEmail(normalizedEmail, activeCompany.id, 'member');
             setInviteEmail('');
-            setSuccess(t({ de: `Benutzer ${user.name} als Member zugewiesen.`, en: `User ${user.name} assigned as member.`, tr: `${user.name} kullanıcısı üye olarak atandı.` }));
-            setTimeout(() => setSuccess(''), 2500);
-        } catch {
-            setError(t({ de: 'Benutzer konnte nicht zugewiesen werden.', en: 'User could not be assigned.', tr: 'Kullanıcı atanamadı.' }));
+            if (result.isNew && result.tempPassword) {
+                setInviteTempPassword(result.tempPassword);
+                setSuccess(t({ de: `Neuer Benutzer ${result.user.name} wurde erstellt und als Member zugewiesen. Bitte das temporäre Passwort notieren.`, en: `New user ${result.user.name} was created and assigned as member. Please note the temporary password.`, tr: `Yeni kullanıcı ${result.user.name} oluşturuldu ve üye olarak atandı. Lütfen geçici şifreyi not edin.` }));
+            } else {
+                setSuccess(t({ de: `Benutzer ${result.user.name} wurde als Member zugewiesen.`, en: `User ${result.user.name} has been assigned as member.`, tr: `${result.user.name} kullanıcısı üye olarak atandı.` }));
+            }
+            setTimeout(() => { setSuccess(''); setInviteTempPassword(null); }, 6000);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : t({ de: 'Benutzer konnte nicht zugewiesen werden.', en: 'User could not be assigned.', tr: 'Kullanıcı atanamadı.' }));
         } finally {
             setInviteLoading(false);
         }
@@ -101,9 +103,43 @@ export function AdminSettings({ currentUser, statusDot }: AdminSettingsProps) {
                         <button className="btn btn-primary btn-sm" onClick={handleInviteByEmail} disabled={inviteLoading}>
                             <Plus size={14} /> {inviteLoading ? t({ de: 'Prüfung...', en: 'Checking...', tr: 'Kontrol ediliyor...' }) : t({ de: 'Per E-Mail zuweisen', en: 'Assign by email', tr: 'E-posta ile ata' })}
                         </button>
+                        <button
+                            className="btn btn-ghost btn-sm btn-icon"
+                            onClick={async () => { setRefreshing(true); await refreshMembers?.(); setRefreshing(false); }}
+                            disabled={refreshing}
+                            title={t({ de: 'Mitglieder aktualisieren', en: 'Refresh members', tr: 'Üyeleri yenile' })}
+                        >
+                            <RefreshCw size={14} className={refreshing ? 'spin' : ''} />
+                        </button>
                     </div>
                 </div>
             </div>
+            {activeCompany && currentPlan && (
+                <div style={{
+                    marginBottom: '12px',
+                    padding: '10px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--bg-hover)',
+                    color: 'var(--text-tertiary)',
+                    fontSize: 'var(--font-size-xs)',
+                }}>
+                    {t({ de: `Plätze: ${companyMembers.length} / ${currentPlan.maxSeats} (1 Admin + ${Math.max(0, currentPlan.maxSeats - 1)} User). Bei unbekannter E-Mail wird ein neuer Account erstellt.`, en: `Seats: ${companyMembers.length} / ${currentPlan.maxSeats} (1 admin + ${Math.max(0, currentPlan.maxSeats - 1)} users). If the email is unknown, a new account is created.`, tr: `Koltuklar: ${companyMembers.length} / ${currentPlan.maxSeats} (1 yönetici + ${Math.max(0, currentPlan.maxSeats - 1)} kullanıcı). E-posta bilinmiyorsa yeni bir hesap oluşturulur.` })}
+                </div>
+            )}
+            {inviteTempPassword && (
+                <div style={{
+                    marginBottom: '12px',
+                    padding: '12px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(16,185,129,0.08)',
+                    border: '1px solid rgba(16,185,129,0.25)',
+                    color: 'var(--text-primary)',
+                    fontSize: 'var(--font-size-xs)',
+                }}>
+                    <strong>{t({ de: 'Temporäres Passwort:', en: 'Temporary password:', tr: 'Geçici şifre:' })}</strong>{' '}
+                    <code style={{ background: 'var(--bg-base)', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{inviteTempPassword}</code>
+                </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {companyMembers.map(member => {

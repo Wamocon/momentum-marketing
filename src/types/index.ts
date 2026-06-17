@@ -13,6 +13,7 @@ export interface User {
   password: string;
   role: Role;
   isSuperAdmin: boolean;
+  isActive: boolean;
   jobTitle: string;
   avatar: string;
   status: 'online' | 'away' | 'offline';
@@ -22,6 +23,8 @@ export interface User {
   whatsappConsent?: boolean;
   /** ISO timestamp of consent capture for auditability. */
   whatsappConsentAt?: string;
+  /** Organisation the user belongs to. */
+  organisationId?: string | null;
   joinedAt: string;
 }
 
@@ -44,6 +47,20 @@ export interface Company {
   industry: string;
   createdAt: string;
   createdBy: string;
+  /** Organisation this project/company belongs to. */
+  organisationId?: string | null;
+}
+
+export interface Organisation {
+  id: string;
+  name: string;
+  slug: string;
+  ownerUserId?: string | null;
+  planId?: string | null;
+  requestedPlanId?: string | null;
+  status: 'active' | 'paused' | 'canceled';
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CompanyMember {
@@ -309,7 +326,7 @@ export type BillingCycle = 'monthly' | 'yearly';
 
 export interface Subscription {
   id: string;
-  companyId: string;
+  organisationId: string;
   planId: string;
   status: SubscriptionStatus;
   currentSeats: number;

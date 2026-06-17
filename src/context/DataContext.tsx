@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import type { Audience, Touchpoint, CustomerJourney, User, Campaign } from '../types';
 import type { CompanyPositioning, CompanyKeyword, BudgetData, TeamMember, ActivityItem, ChartDataPoint, ChannelPerformanceItem } from '../types/dashboard';
 import { useCompany } from './CompanyContext';
@@ -60,10 +60,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const currentUserId = currentUser?.id ?? null;
     const prevCompanyId = useRef<string | null>(null);
     const initialized = useRef(false);
+    const campaignsRef = useRef<Campaign[]>([]);
 
     const [loading, setLoading] = useState(true);
     const [users, setUsers] = useState<User[]>([]);
     const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+    useEffect(() => { campaignsRef.current = campaigns; }, [campaigns]);
     const [audiences, setAudiences] = useState<Audience[]>([]);
     const [budgetData, setBudgetData] = useState<BudgetData>(emptyBudget);
     const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
@@ -168,7 +170,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, [companyId, currentUserId]);
 
     const updateCampaignFn = useCallback(async (id: string, updates: Partial<Campaign>) => {
-        const oldCampaign = campaigns.find(c => c.id === id);
+        const oldCampaign = campaignsRef.current.find(c => c.id === id);
         await api.updateCampaign(id, updates);
         setCampaigns(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
 
@@ -205,7 +207,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }
             }
         }
-    }, [campaigns, companyId, currentUserId]);
+    }, [companyId, currentUserId]);
 
     const deleteCampaignFn = useCallback(async (id: string) => {
         await api.deleteCampaign(id);
@@ -262,20 +264,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setCustomerJourneys(prev => prev.filter(j => j.id !== id));
     }, []);
 
+    const value = useMemo(() => ({
+        users, campaigns, audiences, budgetData, teamMembers,
+        touchpoints, customerJourneys,
+        positioning, companyKeywords: keywords,
+        activityFeed, dashboardChartData, channelPerformance, loading,
+        addAudience, updateAudience: updateAudienceFn, deleteAudience: deleteAudienceFn,
+        addCampaign, updateCampaign: updateCampaignFn, deleteCampaign: deleteCampaignFn,
+        addTouchpoint, updateTouchpoint: updateTouchpointFn, deleteTouchpoint: deleteTouchpointFn,
+        savePositioning: savePositioningFn,
+        addKeyword, deleteKeyword: deleteKeywordFn,
+        addJourney, deleteJourney: deleteJourneyFn,
+        refreshData: loadAll,
+    }), [
+        users, campaigns, audiences, budgetData, teamMembers,
+        touchpoints, customerJourneys, positioning, keywords,
+        activityFeed, dashboardChartData, channelPerformance, loading,
+        addAudience, updateAudienceFn, deleteAudienceFn,
+        addCampaign, updateCampaignFn, deleteCampaignFn,
+        addTouchpoint, updateTouchpointFn, deleteTouchpointFn,
+        savePositioningFn, addKeyword, deleteKeywordFn,
+        addJourney, deleteJourneyFn, loadAll,
+    ]);
+
     return (
-        <DataContext.Provider value={{
-            users, campaigns, audiences, budgetData, teamMembers,
-            touchpoints, customerJourneys,
-            positioning, companyKeywords: keywords,
-            activityFeed, dashboardChartData, channelPerformance, loading,
-            addAudience, updateAudience: updateAudienceFn, deleteAudience: deleteAudienceFn,
-            addCampaign, updateCampaign: updateCampaignFn, deleteCampaign: deleteCampaignFn,
-            addTouchpoint, updateTouchpoint: updateTouchpointFn, deleteTouchpoint: deleteTouchpointFn,
-            savePositioning: savePositioningFn,
-            addKeyword, deleteKeyword: deleteKeywordFn,
-            addJourney, deleteJourney: deleteJourneyFn,
-            refreshData: loadAll,
-        }}>
+        <DataContext.Provider value={value}>
             {children}
         </DataContext.Provider>
     );

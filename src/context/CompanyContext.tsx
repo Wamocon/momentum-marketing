@@ -1,9 +1,10 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
-import type { Company, CompanyMember, CompanyRole } from '../types';
+import type { Company, CompanyMember, CompanyRole, Organisation } from '../types';
 import { useAuth } from './AuthContext';
 import * as api from '../lib/api';
+import { canChangeMemberRole, canRemoveMember } from '../lib/pricing';
 
 const ACTIVE_COMPANY_KEY = 'momentum_active_company';
 
@@ -23,7 +24,7 @@ interface CompanyContextValue {
     /** Deselect (go back to company picker) */
     deselectCompany: () => void;
     /** Create a new company (and auto-join as company_admin) */
-    createCompany: (data: { name: string; description?: string; industry?: string; logo?: string }) => Promise<Company>;
+    createCompany: (data: { name: string; description?: string; industry?: string; logo?: string; organisationId?: string }) => Promise<Company>;
     /** Update company details */
     updateCompany: (id: string, updates: Partial<Company>) => Promise<void>;
     /** Delete a company */
@@ -42,6 +43,10 @@ interface CompanyContextValue {
     allCompanies: Company[];
     /** Load all companies (super-admin) */
     loadAllCompanies: () => Promise<void>;
+    /** All organisations (for super-admin) */
+    allOrganisations: Organisation[];
+    /** Load all organisations (super-admin) */
+    loadAllOrganisations: () => Promise<void>;
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null);
@@ -50,6 +55,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     const { currentUser, isSuperAdmin, setActiveCompanyRole } = useAuth();
     const [userCompanies, setUserCompanies] = useState<(Company & { role: CompanyRole })[]>([]);
     const [allCompanies, setAllCompanies] = useState<Company[]>([]);
+    const [allOrganisations, setAllOrganisations] = useState<Organisation[]>([]);
     const [activeCompany, setActiveCompany] = useState<Company | null>(null);
     const [activeRole, setActiveRole] = useState<CompanyRole | null>(null);
     const [companyMembers, setCompanyMembers] = useState<CompanyMember[]>([]);
@@ -154,7 +160,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem(ACTIVE_COMPANY_KEY);
     }, [setActiveCompanyRole]);
 
-    const createCompanyFn = useCallback(async (data: { name: string; description?: string; industry?: string; logo?: string }) => {
+    const createCompanyFn = useCallback(async (data: { name: string; description?: string; industry?: string; logo?: string; organisationId?: string }) => {
         if (!currentUser) throw new Error('Not authenticated');
         const normalizedName = data.name.trim().toLowerCase();
         if (!normalizedName) {
@@ -167,6 +173,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
             throw new Error('Ein Projekt mit diesem Namen existiert bereits.');
         }
 
+        const organisationId = data.organisationId || currentUser.organisationId || '';
         const company = await api.createCompany({
             name: data.name.trim(),
             slug: data.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
@@ -174,6 +181,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
             industry: data.industry ?? '',
             logo: data.logo ?? '',
             createdBy: currentUser.id,
+            organisationId,
         });
         // Auto-add creator as company_admin
         await api.addCompanyMember(company.id, currentUser.id, 'company_admin');
@@ -222,15 +230,31 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         if (targetMember.userIsSuperAdmin && !isSuperAdmin) {
             throw new Error('Projekt-Admins dürfen Super-Admin-Rechte nicht verändern.');
         }
+        const organisationId = activeCompany?.organisationId ?? (await api.fetchCompanyById(targetMember.companyId))?.organisationId;
+        const plan = organisationId ? await api.fetchSubscription(organisationId).then(s => s?.plan ?? null) : null;
+        const check = canChangeMemberRole(companyMembers, plan, memberId, role);
+        if (!check.allowed) {
+            if (check.reason === 'admin_limit') {
+                throw new Error('Das Projekt darf nur einen Admin haben.');
+            }
+            if (check.reason === 'last_admin') {
+                throw new Error('Der letzte Admin darf nicht entmachtet werden.');
+            }
+            throw new Error('Rolle kann nicht geändert werden.');
+        }
         await api.updateCompanyMemberRole(memberId, role);
         setCompanyMembers(prev => prev.map(m => m.id === memberId ? { ...m, role } : m));
-    }, [companyMembers, isSuperAdmin]);
+    }, [companyMembers, isSuperAdmin, activeCompany]);
 
     const removeMember = useCallback(async (memberId: string) => {
         const targetMember = companyMembers.find(m => m.id === memberId);
         if (!targetMember) throw new Error('Mitglied nicht gefunden.');
         if (targetMember.userIsSuperAdmin && !isSuperAdmin) {
             throw new Error('Projekt-Admins dürfen Super-Admin-Rechte nicht verändern.');
+        }
+        const check = canRemoveMember(companyMembers, memberId);
+        if (!check.allowed && check.reason === 'last_admin') {
+            throw new Error('Der letzte Admin darf nicht entfernt werden.');
         }
         await api.removeCompanyMember(memberId);
         setCompanyMembers(prev => prev.filter(m => m.id !== memberId));
@@ -253,6 +277,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         setAllCompanies(companies);
     }, []);
 
+    const loadAllOrganisations = useCallback(async () => {
+        const organisations = await api.fetchOrganisations();
+        setAllOrganisations(organisations);
+    }, []);
+
     return (
         <CompanyContext.Provider value={{
             userCompanies, activeCompany, activeCompanyRole: activeRole,
@@ -260,7 +289,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
             createCompany: createCompanyFn, updateCompany: updateCompanyFn,
             deleteCompany: deleteCompanyFn, addMember, updateMemberRole,
             removeMember, refreshCompanies, refreshMembers,
-            allCompanies, loadAllCompanies,
+            allCompanies, loadAllCompanies, allOrganisations, loadAllOrganisations,
         }}>
             {children}
         </CompanyContext.Provider>

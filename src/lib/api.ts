@@ -1,9 +1,10 @@
 import { supabase } from './supabase';
+import { canAddOrganisationMember } from './pricing';
 import type {
   User, Campaign, Task, TaskStatus, ContentItem, ContentStatus,
   Audience, Touchpoint, CustomerJourney, JourneyStage,
-  Company, CompanyMember, CompanyRole,
-  Plan, Subscription, ConnectedAccount, SocialPlatform,
+  Company, CompanyMember, CompanyRole, Organisation,
+  Plan, Subscription, SubscriptionStatus, ConnectedAccount, SocialPlatform,
   ScheduledPost, EngagementMetric, EngagementGroup,
   KnowledgeDocument, AiGenerationLog,
   AppNotification, NotificationType, NotificationPriority, NotificationPreference,
@@ -83,6 +84,7 @@ function toCamelUser(r: Record<string, unknown>): User {
     password: r.password as string,
     role: r.role as User['role'],
     isSuperAdmin: (r.is_super_admin as boolean) ?? false,
+    isActive: (r.is_active as boolean) ?? false,
     jobTitle: r.job_title as string,
     avatar: r.avatar as string,
     status: r.status as User['status'],
@@ -90,6 +92,7 @@ function toCamelUser(r: Record<string, unknown>): User {
     phone: r.phone as string,
     whatsappConsent: (r.whatsapp_consent as boolean | undefined) ?? false,
     whatsappConsentAt: (r.whatsapp_consent_at as string | undefined) ?? undefined,
+    organisationId: (r.organisation_id as string | undefined) ?? null,
     joinedAt: r.joined_at as string,
   };
 }
@@ -249,7 +252,7 @@ function toCamelPlan(r: Record<string, unknown>): Plan {
 function toCamelSubscription(r: Record<string, unknown>): Subscription {
   return {
     id: r.id as string,
-    companyId: r.company_id as string,
+    organisationId: r.organisation_id as string,
     planId: r.plan_id as string,
     status: r.status as Subscription['status'],
     currentSeats: r.current_seats as number,
@@ -411,18 +414,62 @@ export async function fetchUserByEmail(email: string): Promise<User | null> {
   return toCamelUser(data);
 }
 
+export interface AuthResult {
+  user: User;
+  token: string;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Request failed with status ${res.status}`);
+  }
+  return data as T;
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(path, { method: 'GET' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Request failed with status ${res.status}`);
+  }
+  return data as T;
+}
+
 export async function loginUser(email: string, password: string): Promise<User | null> {
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail || !password.trim()) return null;
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: normalizedEmail, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 403 && data.error === 'inactive_account') {
+    throw new Error('Ihr Konto wartet auf die Freigabe durch einen Administrator.');
+  }
+  if (!res.ok) {
+    return null;
+  }
+  return data.user as User;
+}
 
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .ilike('email', normalizedEmail)
-    .eq('password', password)
-    .maybeSingle();
-  if (error || !data) return null;
-  return toCamelUser(data);
+export async function restoreSession(): Promise<User | null> {
+  try {
+    const { user } = await getJson<{ user: User }>('/api/auth/me');
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+export async function logout(): Promise<void> {
+  await postJson<{ ok: true }>('/api/auth/logout', {});
 }
 
 export async function updateUserStatus(id: string, status: User['status']): Promise<void> {
@@ -1009,6 +1056,20 @@ export async function deleteJourney(id: string): Promise<void> {
 
 // ─── Companies ─────────────────────────────────────────────
 
+function toCamelOrganisation(r: Record<string, unknown>): Organisation {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    slug: r.slug as string,
+    ownerUserId: (r.owner_user_id as string | undefined) ?? null,
+    planId: (r.plan_id as string | undefined) ?? null,
+    requestedPlanId: (r.requested_plan_id as string | undefined) ?? null,
+    status: (r.status as Organisation['status']) ?? 'active',
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
 function toCamelCompany(r: Record<string, unknown>): Company {
   return {
     id: r.id as string,
@@ -1019,6 +1080,7 @@ function toCamelCompany(r: Record<string, unknown>): Company {
     industry: (r.industry as string) ?? '',
     createdAt: r.created_at as string,
     createdBy: r.created_by as string,
+    organisationId: (r.organisation_id as string | undefined) ?? null,
   };
 }
 
@@ -1042,6 +1104,85 @@ export async function fetchCompanyById(id: string): Promise<Company | null> {
   const { data, error } = await supabase.from('companies').select('*').eq('id', id).single();
   if (error || !data) return null;
   return toCamelCompany(data);
+}
+
+// ─── Organisations ─────────────────────────────────────────
+
+export async function fetchOrganisations(): Promise<Organisation[]> {
+  const { data, error } = await supabase.from('organisations').select('*').order('created_at');
+  if (error) throw error;
+  return (data ?? []).map(toCamelOrganisation);
+}
+
+export async function fetchOrganisationById(id: string): Promise<Organisation | null> {
+  const { data, error } = await supabase.from('organisations').select('*').eq('id', id).single();
+  if (error || !data) return null;
+  return toCamelOrganisation(data);
+}
+
+export async function createOrganisation(
+  organisation: Omit<Organisation, 'id' | 'createdAt' | 'updatedAt'>,
+): Promise<Organisation> {
+  const id = generateId();
+  const slug = organisation.slug || generateSlug(organisation.name);
+  const { data, error } = await supabase.from('organisations').insert({
+    id,
+    name: organisation.name,
+    slug,
+    owner_user_id: organisation.ownerUserId ?? null,
+    plan_id: organisation.planId ?? null,
+    requested_plan_id: organisation.requestedPlanId ?? null,
+    status: organisation.status || 'active',
+  }).select().single();
+  if (error) throw error;
+  return toCamelOrganisation(data);
+}
+
+export async function updateOrganisation(id: string, updates: Partial<Organisation>): Promise<void> {
+  const row: Record<string, unknown> = {};
+  if (updates.name !== undefined) row.name = updates.name;
+  if (updates.slug !== undefined) row.slug = updates.slug;
+  if (updates.ownerUserId !== undefined) row.owner_user_id = updates.ownerUserId ?? null;
+  if (updates.planId !== undefined) row.plan_id = updates.planId ?? null;
+  if (updates.requestedPlanId !== undefined) row.requested_plan_id = updates.requestedPlanId ?? null;
+  if (updates.status !== undefined) row.status = updates.status;
+  const { error } = await supabase.from('organisations').update(row).eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteOrganisation(id: string): Promise<void> {
+  const { error } = await supabase.from('organisations').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function fetchOrganisationUsers(organisationId: string): Promise<User[]> {
+  const { data, error } = await supabase.from('users').select('*').eq('organisation_id', organisationId);
+  if (error) throw error;
+  return (data ?? []).map(toCamelUser);
+}
+
+export async function fetchOrganisationCompanies(organisationId: string): Promise<Company[]> {
+  const { data, error } = await supabase.from('companies').select('*').eq('organisation_id', organisationId);
+  if (error) throw error;
+  return (data ?? []).map(toCamelCompany);
+}
+
+export async function assignUserToOrganisation(userId: string, organisationId: string | null): Promise<void> {
+  const { error } = await supabase.from('users').update({ organisation_id: organisationId }).eq('id', userId);
+  if (error) throw error;
+}
+
+export async function assignCompanyToOrganisation(companyId: string, organisationId: string | null): Promise<void> {
+  const { error } = await supabase.from('companies').update({ organisation_id: organisationId }).eq('id', companyId);
+  if (error) throw error;
+}
+
+export async function updateOrganisationRequestedPlan(organisationId: string, planId: string | null): Promise<void> {
+  const { error } = await supabase
+    .from('organisations')
+    .update({ requested_plan_id: planId })
+    .eq('id', organisationId);
+  if (error) throw error;
 }
 
 export async function fetchUserCompanies(userId: string): Promise<(Company & { role: CompanyRole })[]> {
@@ -1070,6 +1211,7 @@ export async function createCompany(company: Omit<Company, 'id' | 'createdAt'>):
     description: company.description || '',
     industry: company.industry || '',
     created_by: company.createdBy,
+    organisation_id: company.organisationId ?? null,
   }).select().single();
   if (error) throw error;
   return toCamelCompany(data);
@@ -1082,8 +1224,14 @@ export async function updateCompany(id: string, updates: Partial<Company>): Prom
   if (updates.logo !== undefined) row.logo = updates.logo;
   if (updates.description !== undefined) row.description = updates.description;
   if (updates.industry !== undefined) row.industry = updates.industry;
+  if (updates.organisationId !== undefined) row.organisation_id = updates.organisationId ?? null;
   const { error } = await supabase.from('companies').update(row).eq('id', id);
   if (error) throw error;
+}
+
+export async function updateCompanyRequestedPlan(_companyId: string, _planId: string | null): Promise<void> {
+  // Kept for backwards compatibility; plan requests now live on organisations.
+  // TODO: remove callers after Super Admin rework.
 }
 
 export async function deleteCompany(id: string): Promise<void> {
@@ -1113,7 +1261,30 @@ export async function fetchCompanyMembers(companyId: string): Promise<CompanyMem
   });
 }
 
+export async function assertSeatLimitForAdd(
+  companyId: string,
+  _role: CompanyRole,
+  options?: { excludeUserId?: string },
+): Promise<void> {
+  const company = await fetchCompanyById(companyId);
+  if (!company?.organisationId) return;
+  const organisationId = company.organisationId;
+
+  const users = await fetchOrganisationUsers(organisationId);
+  const relevantUsers = options?.excludeUserId
+    ? users.filter(u => u.id !== options.excludeUserId)
+    : users;
+
+  const subscription = await fetchOrganisationSubscription(organisationId);
+  const plan = subscription?.plan ?? null;
+  const check = canAddOrganisationMember(relevantUsers.length, plan);
+  if (!check.allowed) {
+    throw new Error(`Platzlimit erreicht (${check.currentTotal}/${check.maxTotal}). Upgrade erforderlich, um weitere Mitglieder hinzuzufügen.`);
+  }
+}
+
 export async function addCompanyMember(companyId: string, userId: string, role: CompanyRole): Promise<CompanyMember> {
+  await assertSeatLimitForAdd(companyId, role, { excludeUserId: userId });
   const id = generateId();
   const { data, error } = await supabase.from('company_members').insert({
     id,
@@ -1123,6 +1294,66 @@ export async function addCompanyMember(companyId: string, userId: string, role: 
   }).select().single();
   if (error) throw error;
   return toCamelCompanyMember(data);
+}
+
+function generateTempPassword(length = 12): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+  let password = '';
+  for (let i = 0; i < length; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return password;
+}
+
+export interface InviteUserResult {
+  user: User;
+  isNew: boolean;
+  tempPassword?: string;
+}
+
+export async function inviteUserByEmail(
+  email: string,
+  companyId: string,
+  role: CompanyRole = 'member',
+): Promise<InviteUserResult> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const existing = await fetchUserByEmail(normalizedEmail);
+  if (existing) {
+    // Check if already a member
+    const currentRole = await fetchUserCompanyRole(existing.id, companyId);
+    if (currentRole) {
+      throw new Error('Dieser Benutzer ist dem Projekt bereits zugewiesen.');
+    }
+    await assertSeatLimitForAdd(companyId, role, { excludeUserId: existing.id });
+    await addCompanyMember(companyId, existing.id, role);
+    return { user: existing, isNew: false };
+  }
+
+  // Validate seat limit before creating a new user.
+  await assertSeatLimitForAdd(companyId, role);
+
+  // Create a new user with a temporary password inside the same organisation.
+  const company = await fetchCompanyById(companyId);
+  const tempPassword = generateTempPassword();
+  const name = normalizedEmail.split('@')[0] ?? 'Neuer Benutzer';
+  const user = await createUser({
+    name: name.charAt(0).toUpperCase() + name.slice(1),
+    email: normalizedEmail,
+    password: tempPassword,
+    role: 'member',
+    isSuperAdmin: false,
+    isActive: false,
+    jobTitle: '',
+    avatar: generateAvatarInitials(name),
+    status: 'offline',
+    department: '',
+    phone: '',
+    whatsappConsent: false,
+    organisationId: company?.organisationId ?? null,
+    joinedAt: new Date().toISOString(),
+  });
+  await addCompanyMember(companyId, user.id, role);
+  return { user, isNew: true, tempPassword };
 }
 
 export async function updateCompanyMemberRole(memberId: string, role: CompanyRole): Promise<void> {
@@ -1153,41 +1384,39 @@ export async function updateUserSuperAdmin(userId: string, isSuperAdmin: boolean
   if (error) throw error;
 }
 
+export async function updateUserActiveStatus(userId: string, isActive: boolean): Promise<void> {
+  const { error } = await supabase.from('users').update({ is_active: isActive }).eq('id', userId);
+  if (error) throw error;
+}
+
+export async function updateUserRequestedPlan(userId: string, planId: string | null): Promise<void> {
+  const user = await fetchUserById(userId);
+  if (!user?.organisationId) return;
+  const { error } = await supabase
+    .from('organisations')
+    .update({ requested_plan_id: planId })
+    .eq('id', user.organisationId);
+  if (error) throw error;
+}
+
 export async function createUser(user: Omit<User, 'id'>): Promise<User> {
-  const id = generateId();
-  const baseInsert = {
-    id,
+  const { user: created } = await postJson<{ user: User }>('/api/users/create', {
     name: user.name,
     email: user.email,
     password: user.password,
     role: user.role,
-    is_super_admin: user.isSuperAdmin ?? false,
-    job_title: user.jobTitle,
+    isSuperAdmin: user.isSuperAdmin,
+    isActive: user.isActive,
+    jobTitle: user.jobTitle,
     avatar: user.avatar,
-    status: user.status,
     department: user.department,
     phone: user.phone,
-    joined_at: user.joinedAt,
-  };
-
-  const insertWithConsent = {
-    ...baseInsert,
-    whatsapp_consent: user.whatsappConsent ?? false,
-    whatsapp_consent_at: user.whatsappConsent ? (user.whatsappConsentAt ?? new Date().toISOString()) : null,
-  };
-
-  const withConsentResult = await supabase.from('users').insert(insertWithConsent).select().single();
-  if (!withConsentResult.error && withConsentResult.data) {
-    return toCamelUser(withConsentResult.data);
-  }
-
-  if (!isMissingColumnError(withConsentResult.error)) {
-    throw withConsentResult.error;
-  }
-
-  const fallbackResult = await supabase.from('users').insert(baseInsert).select().single();
-  if (fallbackResult.error || !fallbackResult.data) throw fallbackResult.error;
-  return toCamelUser(fallbackResult.data);
+    whatsappConsent: user.whatsappConsent,
+    whatsappConsentAt: user.whatsappConsentAt,
+    organisationId: user.organisationId,
+    joinedAt: user.joinedAt,
+  });
+  return created;
 }
 
 export interface RegisterUserInput {
@@ -1217,44 +1446,15 @@ export async function registerUser(input: RegisterUserInput): Promise<User> {
     throw new Error('Bitte bestaetige die Einwilligung fuer WhatsApp-Verifikationsnachrichten.');
   }
 
-  const existingUser = await fetchUserByEmail(email);
-  if (existingUser) {
-    throw new Error('Diese E-Mail-Adresse ist bereits registriert.');
-  }
-
-  const nowIso = new Date().toISOString();
-  const user = await createUser({
+  const { user } = await postJson<{ user: User }>('/api/auth/register', {
     name,
     email,
     password,
-    role: 'company_admin',
-    isSuperAdmin: false,
-    jobTitle: 'Inhaber',
-    avatar: generateAvatarInitials(name),
-    status: 'offline',
-    department: 'Management',
     phone,
-    whatsappConsent: true,
-    whatsappConsentAt: nowIso,
-    joinedAt: nowIso,
+    whatsappConsent: input.whatsappConsent,
+    companyName,
+    planId: input.planId,
   });
-
-  const workspaceName = companyName || `${name.split(' ')[0]} Workspace`;
-  const company = await createCompany({
-    name: workspaceName,
-    slug: `${generateSlug(workspaceName)}-${generateId().slice(0, 6)}`,
-    description: 'Automatisch bei der Registrierung erstellt.',
-    industry: '',
-    logo: workspaceName.charAt(0).toUpperCase(),
-    createdBy: user.id,
-  });
-  await addCompanyMember(company.id, user.id, 'company_admin');
-
-  // Create subscription for the new company (defaults to starter if no planId given)
-  if (input.planId) {
-    await createSubscription(company.id, input.planId);
-  }
-
   return user;
 }
 
@@ -1275,12 +1475,20 @@ export async function fetchPlans(): Promise<Plan[]> {
   return (data ?? []).map(toCamelPlan);
 }
 
-export async function fetchSubscription(companyId: string): Promise<Subscription | null> {
+export async function fetchAllSubscriptions(): Promise<Subscription[]> {
+  const { data, error } = await supabase
+    .from('subscriptions')
+    .select('*');
+  if (error) throw error;
+  return (data ?? []).map(toCamelSubscription);
+}
+
+export async function fetchSubscription(organisationId: string): Promise<Subscription | null> {
   // Fetch subscription (without FK join — PostgREST may not see the relationship)
   const { data, error } = await supabase
     .from('subscriptions')
     .select('*')
-    .eq('company_id', companyId)
+    .eq('organisation_id', organisationId)
     .single();
   if (error && error.code !== 'PGRST116') throw error; // PGRST116 = not found
   if (!data) return null;
@@ -1298,15 +1506,19 @@ export async function fetchSubscription(companyId: string): Promise<Subscription
   return sub;
 }
 
+export async function fetchOrganisationSubscription(organisationId: string): Promise<Subscription | null> {
+  return fetchSubscription(organisationId);
+}
+
 export async function createSubscription(
-  companyId: string,
+  organisationId: string,
   planId: string,
   billingCycle: 'monthly' | 'yearly' = 'monthly',
 ): Promise<Subscription> {
   const { data, error } = await supabase
     .from('subscriptions')
     .insert({
-      company_id: companyId,
+      organisation_id: organisationId,
       plan_id: planId,
       billing_cycle: billingCycle,
       status: 'active',
@@ -1340,6 +1552,22 @@ export async function updateSubscription(id: string, updates: Partial<{
   if (updates.stripeCustomerId !== undefined) row.stripe_customer_id = updates.stripeCustomerId;
   const { error } = await supabase.from('subscriptions').update(row).eq('id', id);
   if (error) throw error;
+}
+
+export async function ensureSubscription(organisationId: string, planId: string, status: SubscriptionStatus = 'active'): Promise<void> {
+  const existing = await fetchSubscription(organisationId);
+  if (existing) {
+    await updateSubscription(existing.id, { planId, status });
+  } else {
+    await createSubscription(organisationId, planId, 'monthly');
+    // createSubscription sets status to active by default; override if needed.
+    if (status !== 'active') {
+      const created = await fetchSubscription(organisationId);
+      if (created) {
+        await updateSubscription(created.id, { status });
+      }
+    }
+  }
 }
 
 // ─── Connected Social Accounts ─────────────────────────────

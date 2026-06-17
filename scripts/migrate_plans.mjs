@@ -87,7 +87,7 @@ const PLANS = [
     description: 'Ideal for solo marketers and small teams getting started.',
     price_monthly_cents: 2900,
     price_yearly_cents: 29000,
-    max_seats: 2,
+    max_seats: 3, // 1 admin + 2 users
     max_projects: 1,
     included_social_accounts: 0,
     features: { core: true, ai_pro: false, linkedin: false, instagram: false, max_ai_generations_month: 0 },
@@ -101,7 +101,7 @@ const PLANS = [
     description: 'For growing teams with AI-powered content and LinkedIn publishing.',
     price_monthly_cents: 7900,
     price_yearly_cents: 79000,
-    max_seats: 5,
+    max_seats: 6, // 1 admin + 5 users
     max_projects: 3,
     included_social_accounts: 1,
     features: { core: true, ai_pro: true, linkedin: true, instagram: false, max_ai_generations_month: -1 },
@@ -115,7 +115,7 @@ const PLANS = [
     description: 'Full power for agencies and large marketing departments.',
     price_monthly_cents: 14900,
     price_yearly_cents: 149000,
-    max_seats: 10,
+    max_seats: 11, // 1 admin + 10 users
     max_projects: 10,
     included_social_accounts: 4,
     features: { core: true, ai_pro: true, linkedin: true, instagram: true, max_ai_generations_month: -1 },

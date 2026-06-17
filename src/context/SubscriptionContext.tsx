@@ -38,7 +38,7 @@ const SubscriptionContext = createContext<SubscriptionContextValue | null>(null)
 // ─── Provider ──────────────────────────────────────────────
 
 export function SubscriptionProvider({ children }: { children: ReactNode }) {
-  const { currentUser } = useAuth();
+  const { currentUser, isSuperAdmin } = useAuth();
   const { activeCompany } = useCompany();
 
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -54,21 +54,22 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Fetch subscription whenever the active company changes
+  // Fetch subscription whenever the active organisation changes
+  const activeOrganisationId = activeCompany?.organisationId || currentUser?.organisationId;
   useEffect(() => {
-    if (!currentUser || !activeCompany) {
+    if (!currentUser?.id || !activeOrganisationId) {
       setSubscription(null);
       setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    api.fetchSubscription(activeCompany.id)
+    api.fetchSubscription(activeOrganisationId)
       .then(sub => { if (!cancelled) setSubscription(sub); })
       .catch(console.error)
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [currentUser?.id, activeCompany?.id]);
+  }, [currentUser?.id, activeOrganisationId]);
 
   // ── Derived state ──
 
@@ -95,27 +96,31 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
   const [changing, setChanging] = useState(false);
 
   const changePlan = useCallback(async (planId: string) => {
-    if (!activeCompany || changing) return;
+    const organisationId = activeCompany?.organisationId || currentUser?.organisationId;
+    if (!organisationId || changing) return;
     setChanging(true);
     try {
-      if (subscription) {
+      // Normal users request a plan change; Super Admins apply it immediately.
+      if (isSuperAdmin && subscription) {
         await api.updateSubscription(subscription.id, { planId });
+        // Clear any pending request the organisation may have had.
+        await api.updateOrganisationRequestedPlan(organisationId, null);
+        const refreshed = await api.fetchSubscription(organisationId);
+        setSubscription(refreshed);
       } else {
-        await api.createSubscription(activeCompany.id, planId);
+        await api.updateOrganisationRequestedPlan(organisationId, planId);
       }
-      // Re-fetch to get joined plan data
-      const refreshed = await api.fetchSubscription(activeCompany.id);
-      setSubscription(refreshed);
     } finally {
       setChanging(false);
     }
-  }, [activeCompany, subscription, changing]);
+  }, [activeCompany, currentUser, subscription, changing, isSuperAdmin]);
 
   const refresh = useCallback(async () => {
-    if (!activeCompany) return;
-    const refreshed = await api.fetchSubscription(activeCompany.id);
+    const organisationId = activeCompany?.organisationId || currentUser?.organisationId;
+    if (!organisationId) return;
+    const refreshed = await api.fetchSubscription(organisationId);
     setSubscription(refreshed);
-  }, [activeCompany]);
+  }, [activeCompany, currentUser]);
 
   return (
     <SubscriptionContext.Provider value={{

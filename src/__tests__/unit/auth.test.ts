@@ -23,14 +23,33 @@ import type { PermissionKey, User } from '@/types';
 // ─── Mock the entire api module ───────────────────────────────────────────────
 vi.mock('@/lib/api', async () => {
   return {
-    fetchUserById: vi.fn(),
+    restoreSession: vi.fn(),
     updateUserStatus: vi.fn().mockResolvedValue(undefined),
     loginUser: vi.fn(),
     registerUser: vi.fn(),
+    logout: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+// ─── Mock supabase realtime channel ───────────────────────────────────────────
+vi.mock('@/lib/supabase', () => {
+  return {
+    supabase: {
+      channel: () => ({
+        on: () => ({ subscribe: () => ({}) }),
+      }),
+      removeChannel: vi.fn(),
+    },
   };
 });
 
 import * as api from '@/lib/api';
+
+beforeEach(() => {
+  vi.mocked(api.restoreSession).mockResolvedValue(null);
+  vi.mocked(api.logout).mockResolvedValue(undefined);
+  vi.mocked(api.updateUserStatus).mockResolvedValue(undefined);
+});
 
 // ─── Shared test fixture ──────────────────────────────────────────────────────
 const adminUser: User = {
@@ -40,6 +59,7 @@ const adminUser: User = {
   password: 'admin123',
   role: 'company_admin',
   isSuperAdmin: false,
+  isActive: true,
   jobTitle: 'Administrator',
   avatar: 'DA',
   status: 'online',
@@ -163,53 +183,50 @@ describe('PERMISSIONS matrix completeness', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('AuthProvider — session restore', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     vi.mocked(api.updateUserStatus).mockResolvedValue(undefined);
   });
 
-  // BRANCH A: no stored ID → sessionLoading false, no API call
-  it('resolves sessionLoading without user when localStorage is empty', async () => {
+  // BRANCH A: cookie restore not called explicitly, but hook calls restoreSession
+  it('resolves sessionLoading without user when no valid session exists', async () => {
+    vi.mocked(api.restoreSession).mockResolvedValue(null);
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.sessionLoading).toBe(false));
     expect(result.current.currentUser).toBeNull();
-    expect(api.fetchUserById).not.toHaveBeenCalled();
+    expect(api.restoreSession).toHaveBeenCalled();
   });
 
-  // BRANCH B: stored ID + valid user → restores session
-  it('restores user when a valid session ID is stored', async () => {
-    localStorage.setItem('momentum_session_user_id', 'admin-1');
-    vi.mocked(api.fetchUserById).mockResolvedValue(adminUser);
+  // BRANCH B: valid session cookie → restores user
+  it('restores user when a valid session cookie exists', async () => {
+    vi.mocked(api.restoreSession).mockResolvedValue(adminUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.sessionLoading).toBe(false));
 
     expect(result.current.currentUser).toEqual(adminUser);
-    expect(api.fetchUserById).toHaveBeenCalledWith('admin-1');
     expect(api.updateUserStatus).toHaveBeenCalledWith('admin-1', 'online');
   });
 
-  // BRANCH C: stored ID + null user (stale) → clears localStorage
-  it('removes stale session key when user no longer exists', async () => {
-    localStorage.setItem('momentum_session_user_id', 'stale-id');
-    vi.mocked(api.fetchUserById).mockResolvedValue(null);
+  // BRANCH C: inactive restored user → logs out
+  it('logs out restored user when account is inactive', async () => {
+    const inactiveUser: User = { ...adminUser, isActive: false };
+    vi.mocked(api.restoreSession).mockResolvedValue(inactiveUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.sessionLoading).toBe(false));
 
     expect(result.current.currentUser).toBeNull();
-    expect(localStorage.getItem('momentum_session_user_id')).toBeNull();
+    expect(api.logout).toHaveBeenCalled();
   });
 
-  // BRANCH D: stored ID + fetchUserById throws → clears localStorage
-  it('removes session key when fetchUserById rejects', async () => {
-    localStorage.setItem('momentum_session_user_id', 'broken-id');
-    vi.mocked(api.fetchUserById).mockRejectedValue(new Error('Network error'));
+  // BRANCH D: restoreSession throws → resolves without user
+  it('resolves without user when restoreSession rejects', async () => {
+    vi.mocked(api.restoreSession).mockRejectedValue(new Error('Network error'));
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.sessionLoading).toBe(false));
 
     expect(result.current.currentUser).toBeNull();
-    expect(localStorage.getItem('momentum_session_user_id')).toBeNull();
   });
 });
 
@@ -218,11 +235,11 @@ describe('AuthProvider — session restore', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('loginWithCredentials()', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     vi.mocked(api.updateUserStatus).mockResolvedValue(undefined);
   });
 
-  // BRANCH: user found → sets localStorage + currentUser
+  // BRANCH: user found → sets currentUser
   it('sets user and persists session when credentials are valid', async () => {
     vi.mocked(api.loginUser).mockResolvedValue(adminUser);
 
@@ -236,12 +253,11 @@ describe('loginWithCredentials()', () => {
 
     expect(returnedUser).toEqual(adminUser);
     expect(result.current.currentUser).toEqual(adminUser);
-    expect(localStorage.getItem('momentum_session_user_id')).toBe('admin-1');
     expect(api.updateUserStatus).toHaveBeenCalledWith('admin-1', 'online');
   });
 
   // BRANCH: user not found → returns null, no side effects
-  it('returns null without touching localStorage when credentials are invalid', async () => {
+  it('returns null without side effects when credentials are invalid', async () => {
     vi.mocked(api.loginUser).mockResolvedValue(null);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
@@ -254,7 +270,6 @@ describe('loginWithCredentials()', () => {
 
     expect(returnedUser).toBeNull();
     expect(result.current.currentUser).toBeNull();
-    expect(localStorage.getItem('momentum_session_user_id')).toBeNull();
     expect(api.updateUserStatus).not.toHaveBeenCalled();
   });
 });
@@ -264,11 +279,11 @@ describe('loginWithCredentials()', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('registerWithCredentials()', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     vi.mocked(api.updateUserStatus).mockResolvedValue(undefined);
   });
 
-  it('creates user, stores session, and marks user online', async () => {
+  it('creates active user and marks user online', async () => {
     const newUser: User = { ...adminUser, id: 'new-1', email: 'new@test.de', phone: '+491701112233' };
     vi.mocked(api.registerUser).mockResolvedValue(newUser);
 
@@ -286,7 +301,6 @@ describe('registerWithCredentials()', () => {
     });
 
     expect(result.current.currentUser).toEqual(newUser);
-    expect(localStorage.getItem('momentum_session_user_id')).toBe('new-1');
     expect(api.updateUserStatus).toHaveBeenCalledWith('new-1', 'online');
   });
 
@@ -305,7 +319,6 @@ describe('registerWithCredentials()', () => {
     })).rejects.toThrow('already exists');
 
     expect(result.current.currentUser).toBeNull();
-    expect(localStorage.getItem('momentum_session_user_id')).toBeNull();
   });
 });
 
@@ -314,14 +327,13 @@ describe('registerWithCredentials()', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('logout()', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     vi.mocked(api.updateUserStatus).mockResolvedValue(undefined);
   });
 
-  // BRANCH: currentUser exists → calls updateUserStatus('offline')
-  it('calls updateUserStatus offline when user is logged in', async () => {
-    localStorage.setItem('momentum_session_user_id', 'admin-1');
-    vi.mocked(api.fetchUserById).mockResolvedValue(adminUser);
+  // BRANCH: currentUser exists → calls updateUserStatus('offline') and server logout
+  it('calls updateUserStatus offline and server logout when user is logged in', async () => {
+    vi.mocked(api.restoreSession).mockResolvedValue(adminUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.currentUser).toEqual(adminUser));
@@ -329,14 +341,13 @@ describe('logout()', () => {
     act(() => result.current.logout());
 
     expect(result.current.currentUser).toBeNull();
-    expect(localStorage.getItem('momentum_session_user_id')).toBeNull();
+    expect(api.logout).toHaveBeenCalled();
     expect(api.updateUserStatus).toHaveBeenCalledWith('admin-1', 'offline');
   });
 
-  // BRANCH: currentUser is null → skips api call
-  it('clears storage without api call when logout is called while not logged in', async () => {
-    // No stored session ID → useEffect exits early, currentUser stays null
-    vi.mocked(api.fetchUserById).mockResolvedValue(null);
+  // BRANCH: currentUser is null → skips status api call
+  it('calls server logout without status update when logout is called while not logged in', async () => {
+    vi.mocked(api.restoreSession).mockResolvedValue(null);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.sessionLoading).toBe(false));
@@ -354,7 +365,7 @@ describe('logout()', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('can() in AuthProvider context', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     vi.mocked(api.updateUserStatus).mockResolvedValue(undefined);
   });
 
@@ -368,8 +379,7 @@ describe('can() in AuthProvider context', () => {
   });
 
   it('returns true for all permissions when company_admin role is active', async () => {
-    localStorage.setItem('momentum_session_user_id', 'admin-1');
-    vi.mocked(api.fetchUserById).mockResolvedValue(adminUser);
+    vi.mocked(api.restoreSession).mockResolvedValue(adminUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.currentUser).toEqual(adminUser));
@@ -383,8 +393,7 @@ describe('can() in AuthProvider context', () => {
   });
 
   it('returns false for restricted permissions when manager role is active', async () => {
-    localStorage.setItem('momentum_session_user_id', 'mgr-1');
-    vi.mocked(api.fetchUserById).mockResolvedValue(managerUser);
+    vi.mocked(api.restoreSession).mockResolvedValue(managerUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.currentUser).toEqual(managerUser));
@@ -400,8 +409,7 @@ describe('can() in AuthProvider context', () => {
   });
 
   it('only allows canViewAudiences and canEditOwnTasks for member role', async () => {
-    localStorage.setItem('momentum_session_user_id', 'mem-1');
-    vi.mocked(api.fetchUserById).mockResolvedValue(memberUser);
+    vi.mocked(api.restoreSession).mockResolvedValue(memberUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.currentUser).toEqual(memberUser));
@@ -418,7 +426,7 @@ describe('can() in AuthProvider context', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('isRole() in AuthProvider context', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     vi.mocked(api.updateUserStatus).mockResolvedValue(undefined);
   });
 
@@ -434,8 +442,7 @@ describe('isRole() in AuthProvider context', () => {
 
   // BRANCH: matching role → true
   it('returns true for the matching role', async () => {
-    localStorage.setItem('momentum_session_user_id', 'admin-1');
-    vi.mocked(api.fetchUserById).mockResolvedValue(adminUser);
+    vi.mocked(api.restoreSession).mockResolvedValue(adminUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.currentUser).toEqual(adminUser));
@@ -447,8 +454,7 @@ describe('isRole() in AuthProvider context', () => {
 
   // BRANCH: non-matching role → false
   it('returns false for non-matching roles', async () => {
-    localStorage.setItem('momentum_session_user_id', 'admin-1');
-    vi.mocked(api.fetchUserById).mockResolvedValue(adminUser);
+    vi.mocked(api.restoreSession).mockResolvedValue(adminUser);
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.currentUser).toEqual(adminUser));

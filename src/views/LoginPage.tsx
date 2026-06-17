@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage, type AppLanguage } from '../context/LanguageContext';
 import * as api from '../lib/api';
 import { formatPrice, PLAN_SLUGS, type PlanSlug } from '../lib/pricing';
-import type { User, Plan } from '../types';
+import type { Plan } from '../types';
 
 const featureMap: Record<AppLanguage, readonly { icon: typeof Megaphone; title: string; text: string }[]> = {
     de: [
@@ -29,11 +29,7 @@ const featureMap: Record<AppLanguage, readonly { icon: typeof Megaphone; title: 
     ],
 };
 
-interface LoginPageProps {
-    onLogin: (user: User) => void;
-}
-
-export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
+export default function LoginPage() {
     const { loginWithCredentials, registerWithCredentials } = useAuth();
     const { language, setLanguage } = useLanguage();
     const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -89,7 +85,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
             registerLoading: 'Creating account...',
             loginAction: 'Sign in',
             registerAction: 'Create account',
-            registrationSuccess: 'Registration successful. Logging you in...',
+            registrationSuccess: 'Registration successful. Please wait for an administrator to approve your account.',
             devBy: 'Built by WAMOCON GmbH.',
             errorEmailPassword: 'Please enter email and password.',
             errorName: 'Please enter your name.',
@@ -134,7 +130,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
             registerLoading: 'Wird registriert...',
             loginAction: 'Anmelden',
             registerAction: 'Konto erstellen',
-            registrationSuccess: 'Registrierung erfolgreich. Du wirst eingeloggt...',
+            registrationSuccess: 'Registrierung erfolgreich. Bitte warten Sie auf die Freigabe durch einen Administrator.',
             devBy: 'Entwickelt von WAMOCON GmbH.',
             errorEmailPassword: 'Bitte E-Mail und Passwort eingeben.',
             errorName: 'Bitte Namen eingeben.',
@@ -179,7 +175,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
             registerLoading: 'Hesap oluşturuluyor...',
             loginAction: 'Giriş yap',
             registerAction: 'Hesap oluştur',
-            registrationSuccess: 'Kayıt başarılı. Giriş yapılıyor...',
+            registrationSuccess: 'Kayıt başarılı. Lütfen bir yöneticinin hesabınızı onaylamasını bekleyin.',
             devBy: 'WAMOCON GmbH tarafından geliştirilmiştir.',
             errorEmailPassword: 'Lütfen e-posta ve şifre girin.',
             errorName: 'Lütfen adınızı girin.',
@@ -273,6 +269,7 @@ export default function LoginPage({ onLogin: _onLogin }: LoginPageProps) {
                     planId: selectedPlanId || undefined,
                 });
                 setSuccessMessage(text.registrationSuccess);
+                setTimeout(() => switchMode('login'), 3000);
             }
         } catch (err) {
             const message = err instanceof Error && err.message

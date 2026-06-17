@@ -22,7 +22,7 @@
  *  createJourney   — without stages | with stages | error throws
  *  deleteJourney   — success | error throws
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ─── Mock supabase module before any api import ───────────────────────────────
 vi.mock('@/lib/supabase', () => ({
@@ -72,6 +72,12 @@ const dbUser = {
   id: 'u1', name: 'Daniel Admin', email: 'daniel@test.de',
   password: 'admin123', role: 'company_admin', is_super_admin: false, job_title: 'Admin',
   avatar: 'DA', status: 'online', department: 'IT', phone: '', joined_at: '2024-01-01',
+};
+
+const apiUserFixture = {
+  id: 'u1', name: 'Daniel Admin', email: 'daniel@test.de', role: 'company_admin',
+  isSuperAdmin: false, isActive: true, jobTitle: 'Admin', avatar: 'DA', status: 'online',
+  department: 'IT', phone: '', joinedAt: '2024-01-01',
 };
 
 const dbTouchpointWithKpis = {
@@ -132,24 +138,44 @@ describe('fetchUserById()', () => {
 });
 
 describe('loginUser()', () => {
-  // BRANCH: error → null
-  it('returns null when Supabase returns an error', async () => {
-    mockFrom({ data: null, error: new Error('auth error') });
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+    vi.stubGlobal('fetch', mockFetch as unknown as typeof fetch);
+  });
+
+  it('returns User on valid credentials', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ user: apiUserFixture }),
+    });
+    const result = await api.loginUser('daniel@test.de', 'admin123');
+    expect(result).not.toBeNull();
+    expect(result!.email).toBe('daniel@test.de');
+    expect(mockFetch).toHaveBeenCalledWith('/api/auth/login', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ email: 'daniel@test.de', password: 'admin123' }),
+    }));
+  });
+
+  it('returns null on invalid credentials', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'invalid_credentials' }),
+    });
     expect(await api.loginUser('wrong@test.de', 'bad')).toBeNull();
   });
 
-  // BRANCH: no data → null
-  it('returns null when no matching user is found', async () => {
-    mockFrom({ data: null, error: null });
-    expect(await api.loginUser('notfound@test.de', 'wrong')).toBeNull();
-  });
-
-  // BRANCH: success → mapped user
-  it('returns a mapped User on valid credentials', async () => {
-    mockFrom({ data: dbUser, error: null });
-    const user = await api.loginUser('daniel@test.de', 'admin123');
-    expect(user).not.toBeNull();
-    expect(user!.email).toBe('daniel@test.de');
+  it('throws inactive message for inactive accounts', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'inactive_account' }),
+    });
+    await expect(api.loginUser('pending@test.de', 'pw')).rejects.toThrow('Freigabe');
   });
 });
 

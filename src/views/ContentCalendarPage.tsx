@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { ContentItem } from '../types';
-import { ChevronLeft, ChevronRight, Plus, AlertTriangle, Radio, Wand2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, AlertTriangle, Radio, Wand2, X, Calendar, ExternalLink } from 'lucide-react';
 import { useContents, CONTENT_STATUSES } from '../context/ContentContext';
 import { useTasks } from '../context/TaskContext';
 import { CONTENT_TYPE_COLORS } from '../lib/constants';
@@ -17,11 +17,6 @@ const daysOfWeekByLang = {
     de: ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'],
     en: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     tr: ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'],
-};
-const monthNamesByLang = {
-    de: ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'],
-    en: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
-    tr: ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'],
 };
 
 function getDaysInMonth(year, month) { return new Date(year, month + 1, 0).getDate(); }
@@ -41,13 +36,13 @@ export default function ContentCalendarPage() {
     const { language, locale, t } = useLanguage();
     const router = useRouter();
     const daysOfWeek = daysOfWeekByLang[language] || daysOfWeekByLang.en;
-    const monthNames = monthNamesByLang[language] || monthNamesByLang.en;
     const [currentDate, setCurrentDate] = useState(() => {
         const now = new Date();
         return new Date(now.getFullYear(), now.getMonth(), 1);
     });
     const [view, setView] = useState('month');
     const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null);
+    const [selectedSocialPost, setSelectedSocialPost] = useState<ScheduledPost | null>(null);
     const [showNewContentModal, setShowNewContentModal] = useState(false);
 
     // Social Hub posts for calendar overlay
@@ -199,11 +194,12 @@ export default function ContentCalendarPage() {
                                 {daySocialPosts.map(sp => (
                                     <div key={sp.id} className="calendar-event"
                                         title={sp.post_text?.slice(0, 100)}
+                                        onClick={() => setSelectedSocialPost(sp)}
                                         style={{
                                             display: 'flex', alignItems: 'center', gap: '3px',
                                             background: 'rgba(14,165,233,0.12)', color: '#0284c7',
                                             borderLeft: '2px solid #0ea5e9', fontSize: 'var(--font-size-xs)',
-                                            padding: '2px 6px', borderRadius: '4px', cursor: 'default',
+                                            padding: '2px 6px', borderRadius: '4px', cursor: 'pointer',
                                         }}>
                                         <Radio size={9} />
                                         {(sp.topic || sp.platform || 'Post').length > 18 ? (sp.topic || sp.platform || 'Post').slice(0, 18) + '…' : (sp.topic || sp.platform || 'Post')}
@@ -282,6 +278,41 @@ export default function ContentCalendarPage() {
                     </div>
                 )}
             </div>
+
+            {/* Social Post Detail Modal */}
+            {selectedSocialPost && (
+                <div className="modal-overlay" onClick={() => setSelectedSocialPost(null)}>
+                    <div className="modal" onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <div className="modal-title">{selectedSocialPost.topic || t({ de: 'Social Hub Post', en: 'Social Hub Post', tr: 'Social Hub Gönderisi' })}</div>
+                            <button className="btn btn-ghost btn-icon" onClick={() => setSelectedSocialPost(null)}><X size={18} /></button>
+                        </div>
+                        <div className="modal-body">
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
+                                <div><strong>Platform:</strong> {selectedSocialPost.platform || '-'}</div>
+                                <div><strong>Status:</strong> {selectedSocialPost.status}</div>
+                                {selectedSocialPost.scheduled_at && (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <Calendar size={14} /> {new Date(selectedSocialPost.scheduled_at).toLocaleString(locale)}
+                                    </div>
+                                )}
+                                <div style={{ padding: '12px', background: 'var(--bg-hover)', borderRadius: 'var(--radius-sm)', whiteSpace: 'pre-wrap' }}>
+                                    {selectedSocialPost.post_text}
+                                </div>
+                                {selectedSocialPost.hashtags?.length > 0 && (
+                                    <div style={{ color: 'var(--text-tertiary)' }}>{selectedSocialPost.hashtags.join(' ')}</div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-ghost" onClick={() => setSelectedSocialPost(null)}>{t({ de: 'Schließen', en: 'Close', tr: 'Kapat' })}</button>
+                            <button className="btn btn-primary" onClick={() => router.push('/social-hub')}>
+                                <ExternalLink size={14} /> {t({ de: 'Zum Social Hub', en: 'Open Social Hub', tr: 'Social Hub\'a Git' })}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Detail Modal */}
             {selectedContent && (

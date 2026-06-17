@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Campaign, Audience, PermissionKey } from '../types';
 import {
     Calendar, Users, Edit, Bot, Tag, Lock, Plus, X,
@@ -19,21 +19,28 @@ interface OverviewTabProps {
     addingKw: boolean;
     setAddingKw: (v: boolean) => void;
     addKeyword: () => void;
+    removeKeyword: (term: string) => void;
     masterPromptExpanded: boolean;
     setMasterPromptExpanded: (v: boolean) => void;
     promptEditMode: boolean;
     setPromptEditMode: (v: boolean) => void;
     promptValue: string;
     setPromptValue: (v: string) => void;
+    /** Ref attached to the team card so the parent can scroll to it. */
+    teamSectionRef?: RefObject<HTMLDivElement | null>;
+    /** Incremented by the parent to trigger team edit mode and scroll. */
+    teamEditPulse?: number;
 }
 
 export function CampaignOverviewTab({
     campaign, linkedAudiences, navigate, can,
-    kwList, setKwList, newKw, setNewKw, addingKw, setAddingKw, addKeyword,
+    kwList, setKwList: _setKwList, newKw, setNewKw, addingKw, setAddingKw, addKeyword, removeKeyword,
     masterPromptExpanded, setMasterPromptExpanded, promptEditMode, setPromptEditMode,
     promptValue, setPromptValue,
+    teamSectionRef,
+    teamEditPulse,
 }: OverviewTabProps) {
-    const { touchpoints, companyKeywords, users, updateCampaign } = useData();
+    const { touchpoints, companyKeywords, users, audiences, updateCampaign } = useData();
     const responsibleManager = users.find(u => u.id === campaign.responsibleManagerId);
     const teamMembers = users.filter(u => campaign.teamMemberIds?.includes(u.id));
     const managers = users.filter(u => u.role === 'company_admin' || u.role === 'manager');
@@ -44,6 +51,17 @@ export function CampaignOverviewTab({
     const [editTeamIds, setEditTeamIds] = useState<string[]>(campaign.teamMemberIds ?? []);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const [promptSaving, setPromptSaving] = useState(false);
+    const [promptError, setPromptError] = useState<string | null>(null);
+
+    // ─── Audience Edit State ───
+    const [editingAudiences, setEditingAudiences] = useState(false);
+    const [editAudienceIds, setEditAudienceIds] = useState<string[]>(campaign.targetAudiences ?? []);
+    const [audienceSaving, setAudienceSaving] = useState(false);
+    const [audienceSaveError, setAudienceSaveError] = useState<string | null>(null);
+
+    const internalTeamRef = useRef<HTMLDivElement>(null);
+    const teamCardRef = teamSectionRef || internalTeamRef;
 
     const startEdit = () => {
         setEditManagerId(campaign.responsibleManagerId ?? '');
@@ -51,6 +69,14 @@ export function CampaignOverviewTab({
         setSaveError(null);
         setEditingTeam(true);
     };
+
+    useEffect(() => {
+        if (teamEditPulse && teamEditPulse > 0) {
+            startEdit();
+            teamCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [teamEditPulse]);
 
     const saveTeam = async () => {
         setSaving(true);
@@ -71,6 +97,49 @@ export function CampaignOverviewTab({
 
     const toggleEditMember = (uid: string) =>
         setEditTeamIds(prev => prev.includes(uid) ? prev.filter(i => i !== uid) : [...prev, uid]);
+
+    const savePrompt = async () => {
+        setPromptSaving(true);
+        setPromptError(null);
+        try {
+            await updateCampaign(campaign.id, { masterPrompt: promptValue });
+            setPromptEditMode(false);
+        } catch (err) {
+            setPromptError(err instanceof Error ? err.message : 'Master-Prompt konnte nicht gespeichert werden.');
+        } finally {
+            setPromptSaving(false);
+        }
+    };
+
+    const enterPromptEdit = () => {
+        setPromptValue(campaign.masterPrompt || '');
+        setPromptEditMode(true);
+        setMasterPromptExpanded(true);
+        setPromptError(null);
+    };
+
+    const startEditAudiences = () => {
+        setEditAudienceIds(campaign.targetAudiences ?? []);
+        setAudienceSaveError(null);
+        setEditingAudiences(true);
+    };
+
+    const toggleEditAudience = (id: string) =>
+        setEditAudienceIds(prev => prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]);
+
+    const saveAudiences = async () => {
+        setAudienceSaving(true);
+        setAudienceSaveError(null);
+        try {
+            await updateCampaign(campaign.id, { targetAudiences: editAudienceIds });
+            setEditingAudiences(false);
+        } catch (err) {
+            setAudienceSaveError(err instanceof Error ? err.message : 'Zielgruppen konnten nicht gespeichert werden.');
+        } finally {
+            setAudienceSaving(false);
+        }
+    };
+
     return (
         <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '24px', marginBottom: '24px' }}>
@@ -119,7 +188,7 @@ export function CampaignOverviewTab({
             </div>
 
             {/* Manager & Team */}
-            <div className="card" style={{ marginBottom: '24px' }}>
+            <div ref={teamCardRef} className="card" style={{ marginBottom: '24px' }}>
                 <div className="card-header" style={{ marginBottom: '16px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <UsersRound size={16} style={{ color: '#0ea5e9' }} />
@@ -264,9 +333,27 @@ export function CampaignOverviewTab({
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                         <button className="btn btn-ghost btn-sm" onClick={() => setMasterPromptExpanded(!masterPromptExpanded)}>{masterPromptExpanded ? 'Einklappen' : 'Ausklappen'}</button>
-                        {can('canEditCampaigns') && <button className={`btn btn-sm ${promptEditMode ? 'btn-primary' : 'btn-secondary'}`} onClick={() => { if (promptEditMode) setPromptEditMode(false); else { setPromptEditMode(true); setMasterPromptExpanded(true); } }}>{promptEditMode ? '✓ Speichern' : <><Edit size={14} /> Bearbeiten</>}</button>}
+                        {can('canEditCampaigns') && (
+                            <button
+                                className={`btn btn-sm ${promptEditMode ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => { if (promptEditMode) savePrompt(); else enterPromptEdit(); }}
+                                disabled={promptSaving}
+                            >
+                                {promptEditMode ? (promptSaving ? 'Speichern…' : '✓ Speichern') : <><Edit size={14} /> Bearbeiten</>}
+                            </button>
+                        )}
                     </div>
                 </div>
+                {promptError && (
+                    <div style={{
+                        marginTop: '12px', padding: '10px 14px',
+                        background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444',
+                        borderRadius: 'var(--radius-sm)', color: '#ef4444',
+                        fontSize: 'var(--font-size-xs)',
+                    }}>
+                        ⚠ {promptError}
+                    </div>
+                )}
                 <div style={{ marginTop: '16px', maxHeight: masterPromptExpanded ? '2000px' : '80px', overflow: 'hidden', transition: 'max-height 0.4s ease', position: 'relative' }}>
                     {promptEditMode
                         ? <textarea className="form-input form-textarea" value={promptValue} onChange={e => setPromptValue(e.target.value)} style={{ minHeight: '280px', fontFamily: 'monospace', fontSize: 'var(--font-size-xs)' }} />
@@ -278,13 +365,73 @@ export function CampaignOverviewTab({
 
             <div className="content-grid-2">
                 <div className="card">
-                    <div className="card-title" style={{ marginBottom: '12px' }}><Users size={14} style={{ display: 'inline', marginRight: '6px' }} />Zielgruppen ({linkedAudiences.length})</div>
-                    {linkedAudiences.map(a => (
-                        <div key={a.id} style={{ display: 'flex', gap: '10px', padding: '10px', background: 'var(--bg-hover)', borderRadius: 'var(--radius-sm)', borderLeft: `3px solid ${a.color}`, marginBottom: '8px' }}>
-                            <div style={{ width: 32, height: 32, borderRadius: '50%', background: a.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 700, flexShrink: 0 }}>{a.initials}</div>
-                            <div><div style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>{a.name}</div><div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{a.segment} · {a.age} · {a.jobTitle}</div></div>
+                    <div className="card-header" style={{ marginBottom: '12px' }}>
+                        <div className="card-title"><Users size={14} style={{ display: 'inline', marginRight: '6px' }} />Zielgruppen ({linkedAudiences.length})</div>
+                        {can('canEditCampaigns') && !editingAudiences && (
+                            <button className="btn btn-secondary btn-sm" onClick={startEditAudiences}>
+                                <Edit size={14} /> Bearbeiten
+                            </button>
+                        )}
+                        {editingAudiences && (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <button className="btn btn-ghost btn-sm" onClick={() => { setEditingAudiences(false); setAudienceSaveError(null); }}>Abbrechen</button>
+                                <button className="btn btn-primary btn-sm" onClick={saveAudiences} disabled={audienceSaving}>
+                                    <Check size={14} /> {audienceSaving ? 'Speichern…' : 'Speichern'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    {audienceSaveError && (
+                        <div style={{
+                            marginBottom: '16px', padding: '10px 14px',
+                            background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444',
+                            borderRadius: 'var(--radius-sm)', color: '#ef4444',
+                            fontSize: 'var(--font-size-xs)',
+                        }}>
+                            ⚠ {audienceSaveError}
                         </div>
-                    ))}
+                    )}
+                    {editingAudiences ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '280px', overflowY: 'auto' }}>
+                            {audiences.map(a => {
+                                const selected = editAudienceIds.includes(a.id);
+                                return (
+                                    <div
+                                        key={a.id}
+                                        onClick={() => toggleEditAudience(a.id)}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: '10px',
+                                            padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+                                            background: selected ? 'rgba(14,165,233,0.1)' : 'var(--bg-elevated)',
+                                            border: `1px solid ${selected ? '#0ea5e9' : 'transparent'}`,
+                                            cursor: 'pointer', transition: 'all 0.15s',
+                                        }}
+                                    >
+                                        <div style={{
+                                            width: 14, height: 14, borderRadius: '3px', flexShrink: 0,
+                                            border: `2px solid ${selected ? '#0ea5e9' : 'var(--border-color)'}`,
+                                            background: selected ? '#0ea5e9' : 'transparent',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        }}>
+                                            {selected && <Check size={9} color="white" />}
+                                        </div>
+                                        <div style={{ width: 28, height: 28, borderRadius: '50%', background: a.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.6rem', fontWeight: 700, flexShrink: 0 }}>{a.initials}</div>
+                                        <div>
+                                            <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 600 }}>{a.name}</div>
+                                            <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>{a.segment} · {a.age}</div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        linkedAudiences.map(a => (
+                            <div key={a.id} style={{ display: 'flex', gap: '10px', padding: '10px', background: 'var(--bg-hover)', borderRadius: 'var(--radius-sm)', borderLeft: `3px solid ${a.color}`, marginBottom: '8px' }}>
+                                <div style={{ width: 32, height: 32, borderRadius: '50%', background: a.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 700, flexShrink: 0 }}>{a.initials}</div>
+                                <div><div style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>{a.name}</div><div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{a.segment} · {a.age} · {a.jobTitle}</div></div>
+                            </div>
+                        ))
+                    )}
                 </div>
                 <div className="card">
                     <div className="card-title" style={{ marginBottom: '12px' }}><Tag size={14} style={{ display: 'inline', marginRight: '6px' }} />Schlüsselbegriffe</div>
@@ -295,7 +442,7 @@ export function CampaignOverviewTab({
                     <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
                         <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '6px' }}>Kampagnenspezifisch</div>
                         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
-                            {kwList.map(kw => <span key={kw} className="keyword-tag keyword-tag--campaign" style={{ fontSize: '0.65rem' }}>{kw} <button onClick={() => setKwList(kwList.filter(k => k !== kw))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0 }}><X size={8} /></button></span>)}
+                            {kwList.map(kw => <span key={kw} className="keyword-tag keyword-tag--campaign" style={{ fontSize: '0.65rem' }}>{kw} <button onClick={() => removeKeyword(kw)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0 }}><X size={8} /></button></span>)}
                             {addingKw ? (
                                 <div style={{ display: 'flex', gap: '4px' }}>
                                     <input autoFocus value={newKw} onChange={e => setNewKw(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addKeyword(); if (e.key === 'Escape') setAddingKw(false); }} placeholder="Keyword…" style={{ background: 'var(--bg-hover)', border: '1px solid var(--color-primary)', borderRadius: 'var(--radius-full)', padding: '2px 8px', fontSize: '0.65rem', color: 'var(--text-primary)', outline: 'none', width: '100px' }} />
@@ -306,6 +453,20 @@ export function CampaignOverviewTab({
                     </div>
                 </div>
             </div>
+
+            {can('canEditCampaigns') && !editingTeam && (
+                <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => {
+                            startEdit();
+                            teamCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }}
+                    >
+                        <UsersRound size={14} /> Team & Verantwortung bearbeiten
+                    </button>
+                </div>
+            )}
         </>
     );
 }

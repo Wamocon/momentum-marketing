@@ -1,8 +1,9 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { User, Role, CompanyRole, PermissionKey, PermissionMap, RoleConfig } from '../types';
 import * as api from '../lib/api';
+import { supabase } from '../lib/supabase';
 
-const SESSION_KEY = 'momentum_session_user_id';
+
 
 export const ROLES = {
     COMPANY_ADMIN: 'company_admin' as const,
@@ -109,28 +110,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [sessionLoading, setSessionLoading] = useState(true);
     const [activeCompanyRole, setActiveCompanyRole] = useState<CompanyRole | null>(null);
 
-    // Restore session from localStorage on mount
+    // Restore session from HTTP-only cookie on mount
     useEffect(() => {
-        const storedId = localStorage.getItem(SESSION_KEY);
-        if (storedId) {
-            api.fetchUserById(storedId)
-                .then(user => {
-                    if (user) {
+        api.restoreSession()
+            .then(user => {
+                if (user) {
+                    if (!user.isSuperAdmin && user.isActive === false) {
+                        api.logout().catch(console.error);
+                    } else {
                         setCurrentUser(user);
                         api.updateUserStatus(user.id, 'online').catch(console.error);
-                    } else {
-                        localStorage.removeItem(SESSION_KEY);
                     }
-                })
-                .catch(() => localStorage.removeItem(SESSION_KEY))
-                .finally(() => setSessionLoading(false));
-        } else {
-            setTimeout(() => setSessionLoading(false), 0);
-        }
+                }
+            })
+            .catch(() => {})
+            .finally(() => setSessionLoading(false));
     }, []);
 
     const login = useCallback((user: User) => {
-        localStorage.setItem(SESSION_KEY, user.id);
         setCurrentUser(user);
         api.updateUserStatus(user.id, 'online').catch(console.error);
     }, []);
@@ -138,11 +135,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const loginWithCredentials = useCallback(async (email: string, password: string): Promise<User | null> => {
         const user = await api.loginUser(email, password);
         if (user) {
-            localStorage.setItem(SESSION_KEY, user.id);
             setCurrentUser(user);
             api.updateUserStatus(user.id, 'online').catch(console.error);
+            return user;
         }
-        return user;
+        return null;
     }, []);
 
     const registerWithCredentials = useCallback(async (input: {
@@ -155,9 +152,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         planId?: string;
     }): Promise<User> => {
         const user = await api.registerUser(input);
-        localStorage.setItem(SESSION_KEY, user.id);
-        setCurrentUser(user);
-        api.updateUserStatus(user.id, 'online').catch(console.error);
+        if (user.isActive) {
+            setCurrentUser(user);
+            api.updateUserStatus(user.id, 'online').catch(console.error);
+        }
         return user;
     }, []);
 
@@ -165,11 +163,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (currentUser) {
             api.updateUserStatus(currentUser.id, 'offline').catch(console.error);
         }
-        localStorage.removeItem(SESSION_KEY);
+        api.logout().catch(console.error);
         localStorage.removeItem('momentum_active_company');
         setCurrentUser(null);
         setActiveCompanyRole(null);
     }, [currentUser]);
+
+    // Watch for deactivation in realtime and via polling. If the current user is
+    // deactivated (and is not a super-admin), log them out immediately.
+    useEffect(() => {
+        if (!currentUser) return;
+
+        const checkActive = async () => {
+            try {
+                const user = await api.fetchUserById(currentUser.id);
+                if (user && !user.isSuperAdmin && user.isActive === false) {
+                    logout();
+                }
+            } catch {
+                // Ignore network errors; polling will retry.
+            }
+        };
+
+        const intervalId = setInterval(checkActive, 30000);
+
+        const channel = supabase
+            .channel(`auth_user:${currentUser.id}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: 'UPDATE',
+                    schema: '*',
+                    table: 'users',
+                    filter: `id=eq.${currentUser.id}`,
+                },
+                (payload: { new?: Record<string, unknown> }) => {
+                    const updated = payload.new;
+                    if (!updated) return;
+                    const isActive = updated.is_active as boolean | undefined;
+                    const isSuperAdmin = updated.is_super_admin as boolean | undefined;
+                    if (isActive === false && !isSuperAdmin) {
+                        logout();
+                    }
+                },
+            )
+            .subscribe();
+
+        return () => {
+            clearInterval(intervalId);
+            supabase.removeChannel(channel);
+        };
+    }, [currentUser, logout]);
 
     const isSuperAdmin = currentUser?.isSuperAdmin === true;
 

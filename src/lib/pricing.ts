@@ -1,4 +1,4 @@
-import type { Plan, PlanFeatures } from '../types';
+import type { Plan, PlanFeatures, CompanyRole } from '../types';
 
 // ─── Pricing Plan Definitions ──────────────────────────────
 // Aligned with the per-seat pricing model (March 2026).
@@ -27,7 +27,7 @@ export const PLAN_DEFINITIONS: Omit<Plan, 'id' | 'isActive'>[] = [
     description: 'Ideal for solo marketers and small teams getting started.',
     priceMonthly: 2900,
     priceYearly: 29000,
-    maxSeats: 2,
+    maxSeats: 3, // 1 admin + 2 users
     maxProjects: 1,
     includedSocialAccounts: 0,
     sortOrder: 1,
@@ -45,7 +45,7 @@ export const PLAN_DEFINITIONS: Omit<Plan, 'id' | 'isActive'>[] = [
     description: 'For growing teams with AI-powered content and LinkedIn publishing.',
     priceMonthly: 7900,
     priceYearly: 79000,
-    maxSeats: 5,
+    maxSeats: 6, // 1 admin + 5 users
     maxProjects: 3,
     includedSocialAccounts: 1,
     sortOrder: 2,
@@ -63,7 +63,7 @@ export const PLAN_DEFINITIONS: Omit<Plan, 'id' | 'isActive'>[] = [
     description: 'Full power for agencies and large marketing departments.',
     priceMonthly: 14900,
     priceYearly: 149000,
-    maxSeats: 10,
+    maxSeats: 11, // 1 admin + 10 users
     maxProjects: 10,
     includedSocialAccounts: 4,  // 3 LinkedIn + 1 Instagram
     sortOrder: 3,
@@ -123,7 +123,8 @@ export function formatPrice(cents: number): string {
 /** Human-readable feature list for a plan (bilingual). */
 export function getPlanHighlights(plan: Pick<Plan, 'slug' | 'maxSeats' | 'maxProjects' | 'features' | 'includedSocialAccounts'>, lang: 'de' | 'en'): string[] {
   const h: string[] = [];
-  h.push(lang === 'de' ? `${plan.maxSeats} Plätze inklusive` : `${plan.maxSeats} seats included`);
+  const userSeats = Math.max(0, plan.maxSeats - 1);
+  h.push(lang === 'de' ? `1 Admin + ${userSeats} ${userSeats === 1 ? 'User' : 'User'}` : `1 admin + ${userSeats} ${userSeats === 1 ? 'user' : 'users'}`);
   h.push(lang === 'de' ? `${plan.maxProjects} ${plan.maxProjects === 1 ? 'Projekt' : 'Projekte'}` : `${plan.maxProjects} ${plan.maxProjects === 1 ? 'project' : 'projects'}`);
   if (plan.features.core) h.push(lang === 'de' ? 'Dashboard, Kampagnen, Content, Tasks' : 'Dashboard, Campaigns, Content, Tasks');
   if (plan.features.ai_pro) h.push(lang === 'de' ? 'KI Pro (RAG, Wissensbasis, Bildgenerierung)' : 'AI Pro (RAG, knowledge base, image gen)');
@@ -133,4 +134,110 @@ export function getPlanHighlights(plan: Pick<Plan, 'slug' | 'maxSeats' | 'maxPro
   }
   if (plan.features.instagram) h.push(lang === 'de' ? 'Instagram Publishing (1 Konto)' : 'Instagram Publishing (1 account)');
   return h;
+}
+
+// ─── Seat Limit Enforcement ────────────────────────────────
+
+export interface SeatCheckResult {
+  allowed: boolean;
+  currentTotal: number;
+  adminCount: number;
+  maxTotal: number;
+  reason?: 'seat_limit' | 'admin_limit' | 'last_admin' | 'not_found';
+}
+
+function memberHasRole(m: { role?: CompanyRole }, role: CompanyRole): boolean {
+  return m.role === role;
+}
+
+/**
+ * Check whether a new member can be added to a company.
+ * Enforces the strict "1 admin + N users" rule:
+ * - total members must stay <= plan.maxSeats
+ * - at most one company_admin is allowed
+ */
+export function canAddMember(
+  members: { role?: CompanyRole }[],
+  plan: Pick<Plan, 'maxSeats'> | null | undefined,
+  newRole: CompanyRole,
+): SeatCheckResult {
+  const currentTotal = members.length;
+  const adminCount = members.filter(m => memberHasRole(m, 'company_admin')).length;
+  const maxTotal = plan?.maxSeats ?? 1;
+
+  if (currentTotal >= maxTotal) {
+    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'seat_limit' };
+  }
+  if (newRole === 'company_admin' && adminCount >= 1) {
+    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'admin_limit' };
+  }
+  return { allowed: true, currentTotal, adminCount, maxTotal };
+}
+
+/**
+ * Check whether an existing member's role can be changed.
+ * Prevents demoting the last admin or creating a second admin.
+ */
+export function canChangeMemberRole(
+  members: { id: string; role?: CompanyRole }[],
+  plan: Pick<Plan, 'maxSeats'> | null | undefined,
+  memberId: string,
+  newRole: CompanyRole,
+): SeatCheckResult {
+  const currentTotal = members.length;
+  const adminCount = members.filter(m => memberHasRole(m, 'company_admin')).length;
+  const maxTotal = plan?.maxSeats ?? 1;
+  const target = members.find(m => m.id === memberId);
+
+  if (!target) {
+    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'not_found' };
+  }
+
+  if (newRole === 'company_admin' && target.role !== 'company_admin' && adminCount >= 1) {
+    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'admin_limit' };
+  }
+
+  if (target.role === 'company_admin' && newRole !== 'company_admin' && adminCount <= 1) {
+    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'last_admin' };
+  }
+
+  return { allowed: true, currentTotal, adminCount, maxTotal };
+}
+
+/**
+ * Check whether a new user can be added to an organisation.
+ * Enforces the total seat limit of the organisation's plan.
+ */
+export function canAddOrganisationMember(
+  totalUsers: number,
+  plan: Pick<Plan, 'maxSeats'> | null | undefined,
+): SeatCheckResult {
+  const maxTotal = plan?.maxSeats ?? 1;
+  if (totalUsers >= maxTotal) {
+    return { allowed: false, currentTotal: totalUsers, adminCount: 0, maxTotal, reason: 'seat_limit' };
+  }
+  return { allowed: true, currentTotal: totalUsers, adminCount: 0, maxTotal };
+}
+
+/**
+ * Check whether a member can be removed without breaking the "at least 1 admin" rule.
+ */
+export function canRemoveMember(
+  members: { id: string; role?: CompanyRole }[],
+  memberId: string,
+): SeatCheckResult {
+  const currentTotal = members.length;
+  const adminCount = members.filter(m => memberHasRole(m, 'company_admin')).length;
+  const maxTotal = currentTotal; // not relevant for removal
+  const target = members.find(m => m.id === memberId);
+
+  if (!target) {
+    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'not_found' };
+  }
+
+  if (target.role === 'company_admin' && adminCount <= 1) {
+    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'last_admin' };
+  }
+
+  return { allowed: true, currentTotal, adminCount, maxTotal };
 }

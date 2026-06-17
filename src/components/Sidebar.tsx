@@ -130,10 +130,9 @@ const NAV: NavSection[] = [
         badgeKey: "tasks" as const,
       },
       {
-        path: "/analytics",
+        path: "/dashboard",
         icon: BarChart3,
         label: { de: "Berichte", en: "Reports", tr: "Raporlar" },
-        comingSoon: true,
       },
     ],
   },
