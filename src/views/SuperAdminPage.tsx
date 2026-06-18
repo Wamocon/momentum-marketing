@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react';
 import {
     Shield, Building2, Users2, Plus, Trash2, Search,
     ArrowLeft, Crown, UserCheck, X, Edit3, Check, ChevronDown, ChevronUp,
+    UserPlus, UserMinus,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useAuth, ROLE_CONFIG } from '../context/AuthContext';
@@ -38,6 +39,7 @@ export default function SuperAdminPage() {
     // Company members within an organisation's expanded view
     const [companyMembers, setCompanyMembers] = useState<Record<string, { memberId: string; userId: string; role: CompanyRole; userName: string; userEmail: string }[]>>({});
     const [assignByCompany, setAssignByCompany] = useState<Record<string, { userId: string; role: CompanyRole }>>({});
+    const [addToOrgUserId, setAddToOrgUserId] = useState<Record<string, string>>({});
     const [orgFeedback, setOrgFeedback] = useState<Record<string, { error?: string; success?: string }>>({});
     const [companyFeedback, setCompanyFeedback] = useState<Record<string, { error?: string; success?: string }>>({});
 
@@ -432,8 +434,7 @@ export default function SuperAdminPage() {
     const loadCompanyMembers = async (companyId: string) => {
         try {
             const members = await api.fetchCompanyMembers(companyId);
-            const orgUsersList = Object.values(orgUsers).flat();
-            const firstUnassignedUser = orgUsersList.find(u => !members.some(m => m.userId === u.id));
+            const firstUnassignedUser = users.find(u => !members.some(m => m.userId === u.id));
             setCompanyMembers(prev => ({
                 ...prev,
                 [companyId]: members.map(m => ({
@@ -463,12 +464,35 @@ export default function SuperAdminPage() {
             setCompanyMessage(companyId, { error: t({ de: 'Bitte zuerst einen Benutzer auswählen.', en: 'Please select a user first.', tr: 'Lütfen önce bir kullanıcı seçin.' }) });
             return;
         }
+        const selectedUser = users.find(u => u.id === selectedUserId);
+        if (!selectedUser) {
+            setCompanyMessage(companyId, { error: t({ de: 'Benutzer nicht gefunden.', en: 'User not found.', tr: 'Kullanıcı bulunamadı.' }) });
+            return;
+        }
         try {
             setCompanyMessage(companyId, {});
+            // Super-admins may assign any user to any project. Add the membership first,
+            // then move the user to the project's organisation if necessary.
             await api.addCompanyMember(companyId, selectedUserId, selectedRole);
+            if (selectedUser.organisationId !== organisationId) {
+                await api.assignUserToOrganisation(selectedUserId, organisationId || null);
+            }
             await loadCompanyMembers(companyId);
+            const updatedMembers = companyMembers[companyId] ?? [];
+            const nextUnassigned = users.find(u => !updatedMembers.some(m => m.userId === u.id));
+            setAssignByCompany(prev => ({
+                ...prev,
+                [companyId]: {
+                    userId: nextUnassigned?.id ?? '',
+                    role: 'member',
+                },
+            }));
             setCompanyMessage(companyId, { success: t({ de: 'Benutzer erfolgreich zum Projekt zugewiesen.', en: 'User successfully assigned to project.', tr: 'Kullanıcı projeye başarıyla atandı.' }) });
             loadSubscriptions();
+            loadUsers();
+            if (selectedUser.organisationId && selectedUser.organisationId !== organisationId) {
+                loadOrganisationUsers(selectedUser.organisationId);
+            }
             if (organisationId) loadOrganisationUsers(organisationId);
         } catch (err) {
             setCompanyMessage(companyId, { error: err instanceof Error ? err.message : t({ de: 'Zuweisung fehlgeschlagen. Benutzer ist ggf. bereits Mitglied.', en: 'Assignment failed. User may already be a member.', tr: 'Atama başarısız. Kullanıcı zaten üye olabilir.' }) });
@@ -536,6 +560,76 @@ export default function SuperAdminPage() {
         }
     };
 
+    const handleChangeUserRole = async (user: User, role: CompanyRole) => {
+        if (user.id === currentUser?.id) return;
+        try {
+            await api.updateUserRole(user.id, role);
+            loadUsers();
+            if (user.organisationId) loadOrganisationUsers(user.organisationId);
+        } catch (err) {
+            console.error('Failed to update user role:', err);
+        }
+    };
+
+    const handleChangeUserOrganisation = async (user: User, organisationId: string) => {
+        if (user.id === currentUser?.id) return;
+        try {
+            await api.assignUserToOrganisation(user.id, organisationId || null);
+            const previousOrgId = user.organisationId;
+            loadUsers();
+            loadOrganisations();
+            if (previousOrgId) loadOrganisationUsers(previousOrgId);
+            if (organisationId) loadOrganisationUsers(organisationId);
+        } catch (err) {
+            console.error('Failed to update user organisation:', err);
+        }
+    };
+
+    const handleAssignUserToOrganisation = async (organisationId: string) => {
+        const userId = addToOrgUserId[organisationId];
+        if (!userId) {
+            setOrgMessage(organisationId, { error: t({ de: 'Bitte zuerst einen Benutzer auswählen.', en: 'Please select a user first.', tr: 'Lütfen önce bir kullanıcı seçin.' }) });
+            return;
+        }
+        try {
+            setOrgMessage(organisationId, {});
+            await api.assignUserToOrganisation(userId, organisationId);
+            setAddToOrgUserId(prev => ({ ...prev, [organisationId]: '' }));
+            setOrgMessage(organisationId, { success: t({ de: 'Benutzer wurde zur Organisation hinzugefügt.', en: 'User was added to the organisation.', tr: 'Kullanıcı organizasyona eklendi.' }) });
+            loadUsers();
+            loadOrganisationUsers(organisationId);
+        } catch (err) {
+            setOrgMessage(organisationId, { error: err instanceof Error ? err.message : t({ de: 'Benutzer konnte nicht hinzugefügt werden.', en: 'User could not be added.', tr: 'Kullanıcı eklenemedi.' }) });
+        }
+    };
+
+    const handleRemoveUserFromOrganisation = async (user: User) => {
+        if (user.id === currentUser?.id || !user.organisationId) return;
+        const org = getUserOrganisation(user);
+        if (!org) return;
+        if (!confirm(t({ de: `Soll ${user.name} wirklich aus der Organisation "${org.name}" entfernt werden? Alle Projektmitgliedschaften in dieser Organisation werden ebenfalls aufgelöst.`, en: `Do you really want to remove ${user.name} from the organisation "${org.name}"? All project memberships in this organisation will also be removed.`, tr: `${user.name} gerçekten "${org.name}" organizasyonundan kaldırılsın mı? Bu organizasyondaki tüm proje üyelikleri de kaldırılacak.` }))) return;
+        try {
+            setOrgMessage(org.id, {});
+            const companies = orgCompanies[org.id] ?? await api.fetchOrganisationCompanies(org.id);
+            for (const company of companies) {
+                const members = await api.fetchCompanyMembers(company.id);
+                const member = members.find(m => m.userId === user.id);
+                if (member) {
+                    await api.removeCompanyMember(member.id);
+                }
+            }
+            await api.assignUserToOrganisation(user.id, null);
+            setOrgMessage(org.id, { success: t({ de: `${user.name} wurde aus der Organisation entfernt.`, en: `${user.name} was removed from the organisation.`, tr: `${user.name} organizasyondan kaldırıldı.` }) });
+            loadUsers();
+            loadOrganisationUsers(org.id);
+            for (const company of companies) {
+                loadCompanyMembers(company.id);
+            }
+        } catch (err) {
+            setOrgMessage(org.id, { error: err instanceof Error ? err.message : t({ de: 'Benutzer konnte nicht entfernt werden.', en: 'User could not be removed.', tr: 'Kullanıcı kaldırılamadı.' }) });
+        }
+    };
+
     const ownerName = (ownerId?: string | null) => {
         if (!ownerId) return t({ de: 'Kein Eigentümer', en: 'No owner', tr: 'Sahip yok' });
         const owner = users.find(u => u.id === ownerId);
@@ -549,6 +643,7 @@ export default function SuperAdminPage() {
 
     const renderOrganisationUsers = (orgId: string) => {
         const usersInOrg = orgUsers[orgId] ?? [];
+        const availableUsers = users.filter(u => u.id !== currentUser?.id && u.organisationId !== orgId);
         return (
             <div>
                 <div style={{
@@ -557,6 +652,28 @@ export default function SuperAdminPage() {
                     textTransform: 'uppercase',
                 }}>
                     {t({ de: 'Benutzer', en: 'Users', tr: 'Kullanıcılar' })} ({usersInOrg.length})
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    <select
+                        className="form-select"
+                        value={addToOrgUserId[orgId] ?? ''}
+                        onChange={e => setAddToOrgUserId(prev => ({ ...prev, [orgId]: e.target.value }))}
+                        style={{ minWidth: '220px', fontSize: '0.72rem' }}
+                    >
+                        <option value="">{t({ de: 'Benutzer zur Organisation hinzufügen...', en: 'Add user to organisation...', tr: 'Organizasyona kullanıcı ekle...' })}</option>
+                        {availableUsers.map(user => (
+                            <option key={user.id} value={user.id}>
+                                {user.name} ({user.email})
+                            </option>
+                        ))}
+                    </select>
+                    <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleAssignUserToOrganisation(orgId)}
+                        disabled={!addToOrgUserId[orgId]}
+                    >
+                        <UserPlus size={14} /> {t({ de: 'Hinzufügen', en: 'Add', tr: 'Ekle' })}
+                    </button>
                 </div>
                 {usersInOrg.length === 0 ? (
                     <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
@@ -642,6 +759,16 @@ export default function SuperAdminPage() {
                                                 >
                                                     <Trash2 size={14} />
                                                 </button>
+                                                {user.organisationId && (
+                                                    <button
+                                                        className="btn btn-ghost btn-sm"
+                                                        style={{ color: 'var(--text-tertiary)', padding: '4px 6px' }}
+                                                        onClick={() => handleRemoveUserFromOrganisation(user)}
+                                                        title={t({ de: 'Aus Organisation entfernen', en: 'Remove from organisation', tr: 'Organizasyondan kaldır' })}
+                                                    >
+                                                        <UserMinus size={14} />
+                                                    </button>
+                                                )}
                                             </>
                                         )}
                                     </div>
@@ -656,7 +783,6 @@ export default function SuperAdminPage() {
 
     const renderOrganisationCompanies = (orgId: string) => {
         const companiesInOrg = orgCompanies[orgId] ?? [];
-        const orgUsersList = orgUsers[orgId] ?? [];
         return (
             <div style={{ marginTop: '16px' }}>
                 <div style={{
@@ -716,7 +842,7 @@ export default function SuperAdminPage() {
                                         style={{ minWidth: '200px', fontSize: '0.72rem' }}
                                     >
                                         <option value="">{t({ de: 'Benutzer wählen', en: 'Select user', tr: 'Kullanıcı seç' })}</option>
-                                        {orgUsersList
+                                        {users
                                             .filter(user => !(companyMembers[company.id] ?? []).some(member => member.userId === user.id))
                                             .map(user => (
                                                 <option key={user.id} value={user.id}>
@@ -834,12 +960,19 @@ export default function SuperAdminPage() {
     };
 
     return (
-        <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
+        <div style={{
+            height: '100vh',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            background: 'var(--bg-base)',
+        }}>
             {/* Header */}
             <header style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 padding: '16px 32px', borderBottom: '1px solid var(--border-color)',
                 background: 'var(--bg-surface)',
+                flexShrink: 0,
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <Link href="/dashboard" style={{ color: 'var(--text-tertiary)', textDecoration: 'none' }}>
@@ -878,9 +1011,21 @@ export default function SuperAdminPage() {
                 </div>
             </header>
 
-            <div style={{ display: 'flex', gap: '0', maxWidth: '1400px', margin: '0 auto', padding: '24px 32px' }}>
-                {/* Sidebar */}
-                <div style={{ width: '220px', flexShrink: 0, marginRight: '24px' }}>
+            <div style={{
+                flex: 1,
+                display: 'flex',
+                justifyContent: 'center',
+                overflow: 'hidden',
+            }}>
+                <div style={{
+                    display: 'flex',
+                    gap: '0',
+                    width: '100%',
+                    maxWidth: '1400px',
+                    padding: '24px 32px',
+                }}>
+                    {/* Sidebar */}
+                    <div style={{ width: '220px', flexShrink: 0, marginRight: '24px' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {tabs.map(tab => {
                             const Icon = tab.icon;
@@ -942,7 +1087,7 @@ export default function SuperAdminPage() {
                 </div>
 
                 {/* Main Content */}
-                <div style={{ flex: 1 }}>
+                <div className="no-scrollbar" style={{ flex: 1, overflow: 'auto', minWidth: 0, paddingBottom: '80px' }}>
                     {/* Search Bar */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
                         <div style={{ flex: 1, position: 'relative' }}>
@@ -1201,11 +1346,47 @@ export default function SuperAdminPage() {
                                                     </div>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
                                                         <span>{user.email} · {user.jobTitle} · {user.department}</span>
-                                                        {org && (
-                                                            <span style={{ fontSize: '0.68rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}>
-                                                                {org.name}
-                                                            </span>
-                                                        )}
+                                                        <select
+                                                            value={user.role}
+                                                            onChange={(e) => handleChangeUserRole(user, e.target.value as CompanyRole)}
+                                                            disabled={isMe}
+                                                            style={{
+                                                                fontSize: '0.7rem',
+                                                                padding: '2px 5px',
+                                                                borderRadius: 'var(--radius-sm)',
+                                                                border: '1px solid var(--border-color)',
+                                                                background: 'var(--bg-base)',
+                                                                color: 'var(--text-primary)',
+                                                                outline: 'none',
+                                                                cursor: isMe ? 'not-allowed' : 'pointer',
+                                                                opacity: isMe ? 0.6 : 1,
+                                                            }}
+                                                        >
+                                                            <option value="company_admin">Admin</option>
+                                                            <option value="manager">Manager</option>
+                                                            <option value="member">Member</option>
+                                                        </select>
+                                                        <select
+                                                            value={user.organisationId ?? ''}
+                                                            onChange={(e) => handleChangeUserOrganisation(user, e.target.value)}
+                                                            disabled={isMe}
+                                                            style={{
+                                                                fontSize: '0.7rem',
+                                                                padding: '2px 5px',
+                                                                borderRadius: 'var(--radius-sm)',
+                                                                border: '1px solid var(--border-color)',
+                                                                background: 'var(--bg-base)',
+                                                                color: 'var(--text-primary)',
+                                                                outline: 'none',
+                                                                cursor: isMe ? 'not-allowed' : 'pointer',
+                                                                opacity: isMe ? 0.6 : 1,
+                                                            }}
+                                                        >
+                                                            <option value="">{t({ de: 'Keine Organisation', en: 'No organisation', tr: 'Organizasyon yok' })}</option>
+                                                            {organisations.map(o => (
+                                                                <option key={o.id} value={o.id}>{o.name}</option>
+                                                            ))}
+                                                        </select>
                                                         {allPlans.length > 0 && org && (
                                                             <select
                                                                 value={org.requestedPlanId ?? sub?.planId ?? ''}
@@ -1286,6 +1467,7 @@ export default function SuperAdminPage() {
                         </div>
                     )}
                 </div>
+            </div>
             </div>
 
             {/* Create Organisation Modal */}

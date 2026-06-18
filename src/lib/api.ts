@@ -1389,6 +1389,11 @@ export async function updateUserActiveStatus(userId: string, isActive: boolean):
   if (error) throw error;
 }
 
+export async function updateUserRole(userId: string, role: User['role']): Promise<void> {
+  const { error } = await supabase.from('users').update({ role }).eq('id', userId);
+  if (error) throw error;
+}
+
 export async function updateUserRequestedPlan(userId: string, planId: string | null): Promise<void> {
   const user = await fetchUserById(userId);
   if (!user?.organisationId) return;
