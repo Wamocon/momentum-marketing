@@ -1385,9 +1385,9 @@ export async function assertSeatLimitForAdd(
   const organisationId = company.organisationId;
 
   const users = await fetchOrganisationUsers(organisationId);
-  const relevantUsers = options?.excludeUserId
+  const relevantUsers = (options?.excludeUserId
     ? users.filter(u => u.id !== options.excludeUserId)
-    : users;
+    : users).filter(u => !u.isSuperAdmin);
 
   const subscription = await fetchOrganisationSubscription(organisationId);
   const plan = subscription?.plan ?? null;

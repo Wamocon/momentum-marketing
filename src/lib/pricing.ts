@@ -27,7 +27,7 @@ export const PLAN_DEFINITIONS: Omit<Plan, 'id' | 'isActive'>[] = [
     description: 'Ideal for solo marketers and small teams getting started.',
     priceMonthly: 2900,
     priceYearly: 29000,
-    maxSeats: 3, // 1 admin + 2 users
+    maxSeats: 2, // 1 admin + 1 user
     maxProjects: 1,
     includedSocialAccounts: 0,
     sortOrder: 1,
@@ -45,7 +45,7 @@ export const PLAN_DEFINITIONS: Omit<Plan, 'id' | 'isActive'>[] = [
     description: 'For growing teams with AI-powered content and LinkedIn publishing.',
     priceMonthly: 7900,
     priceYearly: 79000,
-    maxSeats: 6, // 1 admin + 5 users
+    maxSeats: 2, // 1 admin + 1 user
     maxProjects: 3,
     includedSocialAccounts: 1,
     sortOrder: 2,
@@ -63,7 +63,7 @@ export const PLAN_DEFINITIONS: Omit<Plan, 'id' | 'isActive'>[] = [
     description: 'Full power for agencies and large marketing departments.',
     priceMonthly: 14900,
     priceYearly: 149000,
-    maxSeats: 11, // 1 admin + 10 users
+    maxSeats: 2, // 1 admin + 1 user
     maxProjects: 10,
     includedSocialAccounts: 4,  // 3 LinkedIn + 1 Instagram
     sortOrder: 3,
@@ -152,31 +152,27 @@ function memberHasRole(m: { role?: CompanyRole }, role: CompanyRole): boolean {
 
 /**
  * Check whether a new member can be added to a company.
- * Enforces the strict "1 admin + N users" rule:
- * - total members must stay <= plan.maxSeats
- * - at most one company_admin is allowed
+ * Enforces the plan seat limit. Super-admins do not count against the limit.
+ * Admins can change/promote roles freely; only the "last admin" rule is kept.
  */
 export function canAddMember(
-  members: { role?: CompanyRole }[],
+  members: { role?: CompanyRole; isSuperAdmin?: boolean }[],
   plan: Pick<Plan, 'maxSeats'> | null | undefined,
   newRole: CompanyRole,
 ): SeatCheckResult {
-  const currentTotal = members.length;
+  const currentTotal = members.filter(m => !m.isSuperAdmin).length;
   const adminCount = members.filter(m => memberHasRole(m, 'company_admin')).length;
   const maxTotal = plan?.maxSeats ?? 1;
 
   if (currentTotal >= maxTotal) {
     return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'seat_limit' };
   }
-  if (newRole === 'company_admin' && adminCount >= 1) {
-    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'admin_limit' };
-  }
   return { allowed: true, currentTotal, adminCount, maxTotal };
 }
 
 /**
  * Check whether an existing member's role can be changed.
- * Prevents demoting the last admin or creating a second admin.
+ * Allows admins to promote other users freely; only prevents demoting the last admin.
  */
 export function canChangeMemberRole(
   members: { id: string; role?: CompanyRole }[],
@@ -191,10 +187,6 @@ export function canChangeMemberRole(
 
   if (!target) {
     return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'not_found' };
-  }
-
-  if (newRole === 'company_admin' && target.role !== 'company_admin' && adminCount >= 1) {
-    return { allowed: false, currentTotal, adminCount, maxTotal, reason: 'admin_limit' };
   }
 
   if (target.role === 'company_admin' && newRole !== 'company_admin' && adminCount <= 1) {

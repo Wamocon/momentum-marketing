@@ -289,6 +289,11 @@ export default function SettingsPage() {
     const [errorMsg, setErrorMsg] = useState('');
     const [inviteEmail, setInviteEmail] = useState('');
     const [inviteLoading, setInviteLoading] = useState(false);
+
+    const billableSeatCount = useMemo(
+        () => companyMembers.filter(m => !m.userIsSuperAdmin).length,
+        [companyMembers],
+    );
     const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({ ...DEFAULT_NOTIFICATION_SETTINGS });
     const [notificationsDirty, setNotificationsDirty] = useState(false);
     const [notificationSavedMsg, setNotificationSavedMsg] = useState('');
@@ -742,7 +747,7 @@ export default function SettingsPage() {
                                     color: 'var(--text-tertiary)',
                                     fontSize: 'var(--font-size-xs)',
                                 }}>
-                                    {t({ de: `Bei unbekannter E-Mail wird ein neuer Account erstellt. Plätze: ${companyMembers.length} / ${currentPlan?.maxSeats ?? '-'} (1 Admin + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} User).`, en: `If the email is unknown, a new account is created. Seats: ${companyMembers.length} / ${currentPlan?.maxSeats ?? '-'} (1 admin + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} users).`, tr: `E-posta bilinmiyorsa yeni bir hesap oluşturulur. Koltuklar: ${companyMembers.length} / ${currentPlan?.maxSeats ?? '-'} (1 yönetici + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} kullanıcı).` })}
+                                    {t({ de: `Bei unbekannter E-Mail wird ein neuer Account erstellt. Plätze: ${billableSeatCount} / ${currentPlan?.maxSeats ?? '-'} (1 Admin + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} User).`, en: `If the email is unknown, a new account is created. Seats: ${billableSeatCount} / ${currentPlan?.maxSeats ?? '-'} (1 admin + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} users).`, tr: `E-posta bilinmiyorsa yeni bir hesap oluşturulur. Koltuklar: ${billableSeatCount} / ${currentPlan?.maxSeats ?? '-'} (1 yönetici + ${Math.max(0, (currentPlan?.maxSeats ?? 1) - 1)} kullanıcı).` })}
                                 </div>
                             )}
                             <div className="table-container">
@@ -1078,7 +1083,7 @@ export default function SettingsPage() {
                                                 <div style={{ background: 'var(--bg-hover)', borderRadius: 'var(--radius-md)', padding: '10px 14px' }}>
                                                     <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>{t({ de: 'Plätze', en: 'Seats', tr: 'Koltuklar' })}</div>
                                                     <div style={{ fontSize: 'var(--font-size-lg)', fontWeight: 700 }}>
-                                                        {companyMembers.length} / {currentPlan.maxSeats}
+                                                        {billableSeatCount} / {currentPlan.maxSeats}
                                                     </div>
                                                     <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
                                                         {t({ de: `1 Admin + ${Math.max(0, currentPlan.maxSeats - 1)} User`, en: `1 admin + ${Math.max(0, currentPlan.maxSeats - 1)} users`, tr: `1 yönetici + ${Math.max(0, currentPlan.maxSeats - 1)} kullanıcı` })}

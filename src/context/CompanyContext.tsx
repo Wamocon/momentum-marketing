@@ -13,7 +13,7 @@ function filterMembersByOrganisation(
     organisationId: string | null | undefined,
 ): CompanyMember[] {
     if (!organisationId) return members;
-    return members.filter(m => m.userOrganisationId === organisationId);
+    return members.filter(m => m.userOrganisationId === organisationId || m.userIsSuperAdmin);
 }
 
 interface CompanyContextValue {
@@ -227,7 +227,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         if (targetUser?.isSuperAdmin && !isSuperAdmin) {
             throw new Error('Projekt-Admins dürfen Super-Admin-Rechte nicht verändern.');
         }
-        if (targetUser && targetUser.organisationId !== activeCompany.organisationId) {
+        if (
+            targetUser &&
+            !targetUser.isSuperAdmin &&
+            targetUser.organisationId !== activeCompany.organisationId
+        ) {
             throw new Error('Der Benutzer gehört nicht zur Organisation dieses Projekts.');
         }
         await api.addCompanyMember(activeCompany.id, userId, role);
