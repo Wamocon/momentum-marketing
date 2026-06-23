@@ -75,6 +75,7 @@ export interface CompanyMember {
   userAvatar?: string;
   userStatus?: User['status'];
   userIsSuperAdmin?: boolean;
+  userOrganisationId?: string | null;
 }
 
 export type PermissionKey =

@@ -1357,7 +1357,7 @@ export async function deleteCompany(id: string): Promise<void> {
 export async function fetchCompanyMembers(companyId: string): Promise<CompanyMember[]> {
   const { data, error } = await supabase
     .from('company_members')
-    .select('*, users(name, email, avatar, status, is_super_admin)')
+    .select('*, users(name, email, avatar, status, is_super_admin, organisation_id)')
     .eq('company_id', companyId);
   if (error) throw error;
   return (data ?? []).map((r: Record<string, unknown>) => {
@@ -1369,6 +1369,7 @@ export async function fetchCompanyMembers(companyId: string): Promise<CompanyMem
       member.userAvatar = user.avatar as string;
       member.userStatus = user.status as User['status'];
       member.userIsSuperAdmin = (user.is_super_admin as boolean) ?? false;
+      member.userOrganisationId = (user.organisation_id as string | null) ?? null;
     }
     return member;
   });
@@ -1440,6 +1441,10 @@ export async function inviteUserByEmail(
     const currentRole = await fetchUserCompanyRole(existing.id, companyId);
     if (currentRole) {
       throw new Error('Dieser Benutzer ist dem Projekt bereits zugewiesen.');
+    }
+    const company = await fetchCompanyById(companyId);
+    if (company?.organisationId && existing.organisationId !== company.organisationId) {
+      throw new Error('Der Benutzer gehört nicht zur Organisation dieses Projekts.');
     }
     await assertSeatLimitForAdd(companyId, role, { excludeUserId: existing.id });
     await addCompanyMember(companyId, existing.id, role);

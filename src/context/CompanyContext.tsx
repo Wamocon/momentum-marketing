@@ -8,6 +8,14 @@ import { canChangeMemberRole, canRemoveMember } from '../lib/pricing';
 
 const ACTIVE_COMPANY_KEY = 'momentum_active_company';
 
+function filterMembersByOrganisation(
+    members: CompanyMember[],
+    organisationId: string | null | undefined,
+): CompanyMember[] {
+    if (!organisationId) return members;
+    return members.filter(m => m.userOrganisationId === organisationId);
+}
+
 interface CompanyContextValue {
     /** List of companies the current user has access to */
     userCompanies: (Company & { role: CompanyRole })[];
@@ -88,7 +96,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
                         setActiveRole(found.role);
                         setActiveCompanyRole(found.role);
                         const members = await api.fetchCompanyMembers(found.id);
-                        setCompanyMembers(members);
+                        setCompanyMembers(filterMembersByOrganisation(members, found.organisationId));
                         selected = true;
                     } else {
                         localStorage.removeItem(ACTIVE_COMPANY_KEY);
@@ -102,7 +110,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
                     setActiveCompanyRole(first.role);
                     localStorage.setItem(ACTIVE_COMPANY_KEY, first.id);
                     const members = await api.fetchCompanyMembers(first.id);
-                    setCompanyMembers(members);
+                    setCompanyMembers(filterMembersByOrganisation(members, first.organisationId));
                 }
 
                 if (companies.length === 0) {
@@ -143,7 +151,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
                 setActiveCompanyRole(role);
                 localStorage.setItem(ACTIVE_COMPANY_KEY, companyId);
                 const members = await api.fetchCompanyMembers(companyId);
-                setCompanyMembers(members);
+                setCompanyMembers(filterMembersByOrganisation(members, company.organisationId));
             }
         } catch (err) {
             console.error('Failed to select company:', err);
@@ -219,9 +227,12 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         if (targetUser?.isSuperAdmin && !isSuperAdmin) {
             throw new Error('Projekt-Admins dürfen Super-Admin-Rechte nicht verändern.');
         }
+        if (targetUser && targetUser.organisationId !== activeCompany.organisationId) {
+            throw new Error('Der Benutzer gehört nicht zur Organisation dieses Projekts.');
+        }
         await api.addCompanyMember(activeCompany.id, userId, role);
         const members = await api.fetchCompanyMembers(activeCompany.id);
-        setCompanyMembers(members);
+        setCompanyMembers(filterMembersByOrganisation(members, activeCompany.organisationId));
     }, [activeCompany, currentUser, isSuperAdmin]);
 
     const updateMemberRole = useCallback(async (memberId: string, role: CompanyRole) => {
@@ -269,7 +280,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     const refreshMembers = useCallback(async () => {
         if (!activeCompany) return;
         const members = await api.fetchCompanyMembers(activeCompany.id);
-        setCompanyMembers(members);
+        setCompanyMembers(filterMembersByOrganisation(members, activeCompany.organisationId));
     }, [activeCompany]);
 
     const loadAllCompanies = useCallback(async () => {
