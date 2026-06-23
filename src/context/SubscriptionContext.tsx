@@ -54,22 +54,26 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Fetch subscription whenever the active organisation changes
+  // Fetch subscription whenever the active project or organisation changes
   const activeOrganisationId = activeCompany?.organisationId || currentUser?.organisationId;
+  const activeCompanyId = activeCompany?.id;
   useEffect(() => {
-    if (!currentUser?.id || !activeOrganisationId) {
+    if (!currentUser?.id || (!activeCompanyId && !activeOrganisationId)) {
       setSubscription(null);
       setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    api.fetchSubscription(activeOrganisationId)
+    const subscriptionRequest = activeCompanyId
+      ? api.fetchCompanySubscription(activeCompanyId, activeCompany?.organisationId)
+      : api.fetchSubscription(activeOrganisationId!);
+    subscriptionRequest
       .then(sub => { if (!cancelled) setSubscription(sub); })
       .catch(console.error)
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [currentUser?.id, activeOrganisationId]);
+  }, [currentUser?.id, activeCompanyId, activeCompany?.organisationId, activeOrganisationId]);
 
   // ── Derived state ──
 
@@ -97,17 +101,30 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 
   const changePlan = useCallback(async (planId: string) => {
     const organisationId = activeCompany?.organisationId || currentUser?.organisationId;
-    if (!organisationId || changing) return;
+    if (changing) return;
     setChanging(true);
     try {
       // Normal users request a plan change; Super Admins apply it immediately.
-      if (isSuperAdmin && subscription) {
-        await api.updateSubscription(subscription.id, { planId });
+      if (isSuperAdmin) {
+        if (subscription?.id) {
+          await api.updateSubscription(subscription.id, { planId });
+        } else if (organisationId) {
+          await api.createSubscription(organisationId, planId);
+        } else {
+          return;
+        }
         // Clear any pending request the organisation may have had.
-        await api.updateOrganisationRequestedPlan(organisationId, null);
-        const refreshed = await api.fetchSubscription(organisationId);
+        if (organisationId) {
+          await api.updateOrganisationRequestedPlan(organisationId, null);
+        }
+        const refreshed = activeCompany?.id
+          ? await api.fetchCompanySubscription(activeCompany.id, activeCompany.organisationId)
+          : organisationId
+            ? await api.fetchSubscription(organisationId)
+            : null;
         setSubscription(refreshed);
       } else {
+        if (!organisationId) return;
         await api.updateOrganisationRequestedPlan(organisationId, planId);
       }
     } finally {
@@ -117,8 +134,12 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     const organisationId = activeCompany?.organisationId || currentUser?.organisationId;
-    if (!organisationId) return;
-    const refreshed = await api.fetchSubscription(organisationId);
+    if (!activeCompany?.id && !organisationId) return;
+    const refreshed = activeCompany?.id
+      ? await api.fetchCompanySubscription(activeCompany.id, activeCompany.organisationId)
+      : organisationId
+        ? await api.fetchSubscription(organisationId)
+        : null;
     setSubscription(refreshed);
   }, [activeCompany, currentUser]);
 

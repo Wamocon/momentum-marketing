@@ -145,6 +145,7 @@ export function AdminSettings({ currentUser, statusDot }: AdminSettingsProps) {
                 {companyMembers.map(member => {
                     const cfg = ROLE_CONFIG[member.role];
                     const isMe = member.userId === currentUser?.id;
+                    const isSelfProtected = isMe && !isSuperAdmin;
                     const isProtectedSuperAdmin = member.userIsSuperAdmin && !isSuperAdmin;
                     return (
                         <div key={member.id} className="card" style={{ padding: '16px', borderLeft: `3px solid ${cfg.color}` }}>
@@ -188,7 +189,7 @@ export function AdminSettings({ currentUser, statusDot }: AdminSettingsProps) {
                                     <select
                                         value={member.role}
                                         onChange={e => handleRoleUpdate(member.id, e.target.value as 'company_admin' | 'manager' | 'member')}
-                                        disabled={isMe || isProtectedSuperAdmin}
+                                        disabled={isSelfProtected || isProtectedSuperAdmin}
                                         title={isProtectedSuperAdmin ? t({ de: 'Super-Admin-Rollen dürfen nur von Super-Admins angepasst werden.', en: 'Super admin roles can only be adjusted by super admins.', tr: 'Süper yönetici rolleri yalnızca süper yöneticiler tarafından değiştirilebilir.' }) : ''}
                                         style={{
                                             background: 'var(--bg-elevated)', border: '1px solid var(--border-color)',

@@ -233,7 +233,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         const organisationId = activeCompany?.organisationId ?? (await api.fetchCompanyById(targetMember.companyId))?.organisationId;
         const plan = organisationId ? await api.fetchSubscription(organisationId).then(s => s?.plan ?? null) : null;
         const check = canChangeMemberRole(companyMembers, plan, memberId, role);
-        if (!check.allowed) {
+        if (!isSuperAdmin && !check.allowed) {
             if (check.reason === 'admin_limit') {
                 throw new Error('Das Projekt darf nur einen Admin haben.');
             }

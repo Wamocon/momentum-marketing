@@ -39,7 +39,9 @@ export default function SuperAdminPage() {
     // Company members within an organisation's expanded view
     const [companyMembers, setCompanyMembers] = useState<Record<string, { memberId: string; userId: string; role: CompanyRole; userName: string; userEmail: string }[]>>({});
     const [assignByCompany, setAssignByCompany] = useState<Record<string, { userId: string; role: CompanyRole }>>({});
+    const [assignSearchByCompany, setAssignSearchByCompany] = useState<Record<string, string>>({});
     const [addToOrgUserId, setAddToOrgUserId] = useState<Record<string, string>>({});
+    const [addToOrgUserSearch, setAddToOrgUserSearch] = useState<Record<string, string>>({});
     const [orgFeedback, setOrgFeedback] = useState<Record<string, { error?: string; success?: string }>>({});
     const [companyFeedback, setCompanyFeedback] = useState<Record<string, { error?: string; success?: string }>>({});
 
@@ -140,7 +142,23 @@ export default function SuperAdminPage() {
             .replace(/(^-|-$)/g, '');
 
     const orgSubscription = (orgId: string) => allSubscriptions.find(s => s.organisationId === orgId);
-
+    const userOptionLabel = (user: User) => `${user.name} (${user.email})`;
+    const findUserFromSearch = (value: string, candidates: User[]) => {
+        const query = value.trim().toLowerCase();
+        if (!query) return null;
+        const exact = candidates.find(user =>
+            userOptionLabel(user).toLowerCase() === query ||
+            user.email.toLowerCase() === query ||
+            user.name.toLowerCase() === query,
+        );
+        if (exact) return exact;
+        const partialMatches = candidates.filter(user =>
+            userOptionLabel(user).toLowerCase().includes(query) ||
+            user.email.toLowerCase().includes(query) ||
+            user.name.toLowerCase().includes(query),
+        );
+        return partialMatches.length === 1 ? partialMatches[0] : null;
+    };
     const filteredOrganisations = organisations.filter(o =>
         o.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         o.slug.toLowerCase().includes(searchQuery.toLowerCase())
@@ -158,6 +176,7 @@ export default function SuperAdminPage() {
             loadOrganisations();
         } catch (err) {
             console.error('Failed to delete organisation:', err);
+            alert(err instanceof Error ? err.message : t({ de: 'Organisation konnte nicht gelöscht werden.', en: 'Organisation could not be deleted.', tr: 'Organizasyon silinemedi.' }));
         }
     };
 
@@ -169,18 +188,25 @@ export default function SuperAdminPage() {
             setCreateOrgError(t({ de: 'Bitte einen Organisationsnamen eingeben.', en: 'Please enter an organisation name.', tr: 'Lütfen bir organizasyon adı girin.' }));
             return;
         }
+        if (!newOrgOwnerId) {
+            setCreateOrgError(t({ de: 'Bitte einen Organisations-Admin auswählen.', en: 'Please select an organisation admin.', tr: 'Lütfen bir organizasyon yöneticisi seçin.' }));
+            return;
+        }
         setCreateOrgLoading(true);
         try {
             const org = await api.createOrganisation({
                 name,
                 slug: `${generateSlug(name)}-${Date.now().toString(36)}`,
                 ownerUserId: newOrgOwnerId || null,
-                planId: null,
+                planId: newOrgPlanId || null,
                 requestedPlanId: null,
                 status: 'active',
             });
             if (newOrgPlanId) {
-                await api.createSubscription(org.id, newOrgPlanId);
+                await api.applyOrganisationPlan(org.id, newOrgPlanId, { clearRequestedPlan: false });
+            }
+            if (newOrgOwnerId) {
+                await api.syncOrganisationAdmin(org.id);
             }
             setNewOrgName('');
             setNewOrgOwnerId('');
@@ -261,7 +287,10 @@ export default function SuperAdminPage() {
     };
 
     const handleDeleteUser = async (userId: string) => {
-        if (userId === currentUser?.id) return;
+        if (userId === currentUser?.id) {
+            alert(t({ de: 'Du kannst deinen eigenen Benutzeraccount nicht löschen.', en: 'You cannot delete your own user account.', tr: 'Kendi kullanıcı hesabınızı silemezsiniz.' }));
+            return;
+        }
         if (!confirm(t({ de: 'Soll dieser Benutzer wirklich gelöscht werden?', en: 'Do you really want to delete this user?', tr: 'Bu kullanıcı gerçekten silinsin mi?' }))) return;
         try {
             await api.deleteUser(userId);
@@ -269,6 +298,7 @@ export default function SuperAdminPage() {
             if (expandedOrgId) loadOrganisationUsers(expandedOrgId);
         } catch (err) {
             console.error('Failed to delete user:', err);
+            alert(err instanceof Error ? err.message : t({ de: 'Benutzer konnte nicht gelöscht werden.', en: 'User could not be deleted.', tr: 'Kullanıcı silinemedi.' }));
         }
     };
 
@@ -328,13 +358,7 @@ export default function SuperAdminPage() {
                 setOrgMessage(org.id, { error: t({ de: `Planwechsel abgelehnt: ${usersInOrg.length} Benutzer passen nicht in ${requestedPlan.name} (${requestedPlan.maxSeats} Plätze).`, en: `Plan change rejected: ${usersInOrg.length} users do not fit into ${requestedPlan.name} (${requestedPlan.maxSeats} seats).`, tr: `Plan değişikliği reddedildi: ${usersInOrg.length} kullanıcı ${requestedPlan.name} (${requestedPlan.maxSeats} koltuk) planına sığmıyor.` }) });
                 return;
             }
-            const sub = orgSubscription(org.id);
-            if (sub) {
-                await api.updateSubscription(sub.id, { planId: requestedPlan.id, status: 'active' });
-            } else {
-                await api.createSubscription(org.id, requestedPlan.id, 'monthly');
-            }
-            await api.updateOrganisationRequestedPlan(org.id, null);
+            await api.applyOrganisationPlan(org.id, requestedPlan.id);
             setOrgMessage(org.id, { success: t({ de: `Planwechsel zu ${requestedPlan.name} freigegeben.`, en: `Plan change to ${requestedPlan.name} approved.`, tr: `${requestedPlan.name} plan değişikliği onaylandı.` }) });
             refreshAll();
         } catch (err) {
@@ -356,14 +380,10 @@ export default function SuperAdminPage() {
 
     const handleApplyOrganisationPlan = async (org: Organisation, newPlanId: string) => {
         try {
-            const sub = orgSubscription(org.id);
-            if (sub) {
-                await api.updateSubscription(sub.id, { planId: newPlanId, status: 'active' });
-            } else if (newPlanId) {
-                await api.createSubscription(org.id, newPlanId, 'monthly');
-            }
-            if (org.requestedPlanId) {
-                await api.updateOrganisationRequestedPlan(org.id, null);
+            if (newPlanId) {
+                await api.applyOrganisationPlan(org.id, newPlanId);
+            } else if (org.requestedPlanId || org.planId) {
+                await api.updateOrganisation(org.id, { planId: null, requestedPlanId: null });
             }
             setOrgMessage(org.id, { success: t({ de: 'Plan direkt aktualisiert.', en: 'Plan updated directly.', tr: 'Plan doğrudan güncellendi.' }) });
             refreshAll();
@@ -416,6 +436,7 @@ export default function SuperAdminPage() {
             return;
         }
         setExpandedOrgId(orgId);
+        await api.syncOrganisationAdmin(orgId);
         await Promise.all([loadOrganisationUsers(orgId), loadOrganisationCompanies(orgId)]);
         const companies = await api.fetchOrganisationCompanies(orgId);
         for (const company of companies) {
@@ -452,13 +473,19 @@ export default function SuperAdminPage() {
                     role: 'member',
                 },
             }));
+            setAssignSearchByCompany(prev => ({
+                ...prev,
+                [companyId]: prev[companyId] ?? (firstUnassignedUser ? userOptionLabel(firstUnassignedUser) : ''),
+            }));
         } catch (err) {
             console.error('Failed to load members:', err);
         }
     };
 
     const handleAssignUserToCompany = async (companyId: string, organisationId: string) => {
-        const selectedUserId = assignByCompany[companyId]?.userId;
+        const availableUsers = users.filter(user => !(companyMembers[companyId] ?? []).some(member => member.userId === user.id));
+        const matchedSearchUser = findUserFromSearch(assignSearchByCompany[companyId] ?? '', availableUsers);
+        const selectedUserId = assignByCompany[companyId]?.userId || matchedSearchUser?.id;
         const selectedRole = assignByCompany[companyId]?.role ?? 'member';
         if (!selectedUserId) {
             setCompanyMessage(companyId, { error: t({ de: 'Bitte zuerst einen Benutzer auswählen.', en: 'Please select a user first.', tr: 'Lütfen önce bir kullanıcı seçin.' }) });
@@ -477,15 +504,28 @@ export default function SuperAdminPage() {
             if (selectedUser.organisationId !== organisationId) {
                 await api.assignUserToOrganisation(selectedUserId, organisationId || null);
             }
+            const organisation = organisations.find(org => org.id === organisationId);
+            if (selectedRole === 'company_admin' && organisation && !organisation.ownerUserId) {
+                await api.updateOrganisation(organisation.id, { ownerUserId: selectedUserId });
+            }
+            if (organisationId) {
+                await api.syncOrganisationAdmin(organisationId);
+            }
             await loadCompanyMembers(companyId);
             const updatedMembers = companyMembers[companyId] ?? [];
-            const nextUnassigned = users.find(u => !updatedMembers.some(m => m.userId === u.id));
+            const nextUnassigned = users.find(u =>
+                u.id !== selectedUserId && !updatedMembers.some(m => m.userId === u.id),
+            );
             setAssignByCompany(prev => ({
                 ...prev,
                 [companyId]: {
                     userId: nextUnassigned?.id ?? '',
                     role: 'member',
                 },
+            }));
+            setAssignSearchByCompany(prev => ({
+                ...prev,
+                [companyId]: nextUnassigned ? userOptionLabel(nextUnassigned) : '',
             }));
             setCompanyMessage(companyId, { success: t({ de: 'Benutzer erfolgreich zum Projekt zugewiesen.', en: 'User successfully assigned to project.', tr: 'Kullanıcı projeye başarıyla atandı.' }) });
             loadSubscriptions();
@@ -499,7 +539,13 @@ export default function SuperAdminPage() {
         }
     };
 
-    const handleUpdateCompanyMemberRole = async (companyId: string, memberId: string, role: CompanyRole) => {
+    const handleUpdateCompanyMemberRole = async (organisationId: string, companyId: string, memberId: string, role: CompanyRole) => {
+        const organisation = organisations.find(org => org.id === organisationId);
+        const targetMember = (companyMembers[companyId] ?? []).find(member => member.memberId === memberId);
+        if (organisation?.ownerUserId && targetMember?.userId === organisation.ownerUserId && role !== 'company_admin') {
+            setCompanyMessage(companyId, { error: t({ de: 'Der Organisations-Admin muss in jedem Projekt Admin bleiben.', en: 'The organisation admin must remain admin in every project.', tr: 'Organizasyon yöneticisi her projede admin kalmalıdır.' }) });
+            return;
+        }
         try {
             setCompanyMessage(companyId, {});
             await api.updateCompanyMemberRole(memberId, role);
@@ -515,24 +561,30 @@ export default function SuperAdminPage() {
         }
     };
 
-    const handleRemoveCompanyMember = async (companyId: string, memberId: string, userName: string) => {
+    const handleRemoveCompanyMember = async (organisationId: string, companyId: string, memberId: string, userName: string) => {
         const companyList = companyMembers[companyId] ?? [];
         const targetMember = companyList.find(m => m.memberId === memberId);
         if (!targetMember) {
             setCompanyMessage(companyId, { error: t({ de: 'Mitglied nicht gefunden.', en: 'Member not found.', tr: 'Üye bulunamadı.' }) });
             return;
         }
+        const organisation = organisations.find(org => org.id === organisationId);
+        const isOrganisationAdmin = organisation?.ownerUserId === targetMember.userId;
+        if (false && isOrganisationAdmin) {
+            setCompanyMessage(companyId, { error: t({ de: 'Der Organisations-Admin kann nicht aus einem Projekt entfernt werden.', en: 'The organisation admin cannot be removed from a project.', tr: 'Organizasyon yöneticisi projeden kaldırılamaz.' }) });
+            return;
+        }
 
         const isCurrentUserInActiveCompany =
             targetMember.userId === currentUser?.id && activeCompany?.id === companyId;
-        if (isCurrentUserInActiveCompany) {
+        if (false && isCurrentUserInActiveCompany) {
             setCompanyMessage(companyId, { error: t({ de: 'Du kannst deinen eigenen Account nicht aus dem aktiven Projekt entfernen.', en: 'You cannot remove your own account from the active project.', tr: 'Aktif projeden kendi hesabınızı kaldıramazsınız.' }) });
             return;
         }
 
         const adminCount = companyList.filter(m => m.role === 'company_admin').length;
         const isLastAdmin = targetMember.role === 'company_admin' && adminCount <= 1;
-        if (isLastAdmin) {
+        if (isLastAdmin && !isOrganisationAdmin) {
             setCompanyMessage(companyId, { error: t({ de: 'Der letzte Admin eines Projekts kann nicht entfernt werden.', en: 'The last admin of a project cannot be removed.', tr: 'Bir projenin son admini kaldırılamaz.' }) });
             return;
         }
@@ -541,8 +593,17 @@ export default function SuperAdminPage() {
         if (!confirmed) return;
         try {
             setCompanyMessage(companyId, {});
+            if (isOrganisationAdmin) {
+                const nextOwnerId = await api.transferOrganisationAdmin(organisationId, targetMember.userId);
+                if (!nextOwnerId) {
+                    setCompanyMessage(companyId, { error: t({ de: 'Bitte zuerst einen anderen Benutzer zur Organisation hinzufügen. Eine Organisation braucht immer einen Admin.', en: 'Please add another user to the organisation first. An organisation always needs an admin.', tr: 'Lütfen önce organizasyona başka bir kullanıcı ekleyin. Bir organizasyonun her zaman bir yöneticisi olmalıdır.' }) });
+                    return;
+                }
+            }
             await api.removeCompanyMember(memberId);
             await loadCompanyMembers(companyId);
+            await loadOrganisationUsers(organisationId);
+            loadOrganisations();
             setCompanyMessage(companyId, { success: t({ de: `${userName} wurde aus dem Projekt entfernt.`, en: `${userName} was removed from the project.`, tr: `${userName} projeden kaldırıldı.` }) });
         } catch {
             setCompanyMessage(companyId, { error: t({ de: 'Mitglied konnte nicht entfernt werden.', en: 'Member could not be removed.', tr: 'Üye kaldırılamadı.' }) });
@@ -557,6 +618,7 @@ export default function SuperAdminPage() {
             loadSubscriptions();
         } catch (err) {
             console.error('Failed to delete company:', err);
+            setOrgMessage(organisationId, { error: err instanceof Error ? err.message : t({ de: 'Projekt konnte nicht gelöscht werden.', en: 'Project could not be deleted.', tr: 'Proje silinemedi.' }) });
         }
     };
 
@@ -573,6 +635,11 @@ export default function SuperAdminPage() {
 
     const handleChangeUserOrganisation = async (user: User, organisationId: string) => {
         if (user.id === currentUser?.id) return;
+        const ownedOrganisation = organisations.find(org => org.ownerUserId === user.id);
+        if (ownedOrganisation && ownedOrganisation.id !== organisationId) {
+            alert(t({ de: 'Der Organisations-Admin kann nicht aus seiner Organisation verschoben werden.', en: 'The organisation admin cannot be moved out of their organisation.', tr: 'Organizasyon yöneticisi kendi organizasyonundan taşınamaz.' }));
+            return;
+        }
         try {
             await api.assignUserToOrganisation(user.id, organisationId || null);
             const previousOrgId = user.organisationId;
@@ -586,7 +653,9 @@ export default function SuperAdminPage() {
     };
 
     const handleAssignUserToOrganisation = async (organisationId: string) => {
-        const userId = addToOrgUserId[organisationId];
+        const availableUsers = users.filter(u => u.id !== currentUser?.id && u.organisationId !== organisationId);
+        const matchedSearchUser = findUserFromSearch(addToOrgUserSearch[organisationId] ?? '', availableUsers);
+        const userId = addToOrgUserId[organisationId] || matchedSearchUser?.id;
         if (!userId) {
             setOrgMessage(organisationId, { error: t({ de: 'Bitte zuerst einen Benutzer auswählen.', en: 'Please select a user first.', tr: 'Lütfen önce bir kullanıcı seçin.' }) });
             return;
@@ -594,9 +663,16 @@ export default function SuperAdminPage() {
         try {
             setOrgMessage(organisationId, {});
             await api.assignUserToOrganisation(userId, organisationId);
+            const organisation = organisations.find(org => org.id === organisationId);
+            if (organisation && !organisation.ownerUserId) {
+                await api.updateOrganisation(organisationId, { ownerUserId: userId });
+            }
+            await api.syncOrganisationAdmin(organisationId);
             setAddToOrgUserId(prev => ({ ...prev, [organisationId]: '' }));
+            setAddToOrgUserSearch(prev => ({ ...prev, [organisationId]: '' }));
             setOrgMessage(organisationId, { success: t({ de: 'Benutzer wurde zur Organisation hinzugefügt.', en: 'User was added to the organisation.', tr: 'Kullanıcı organizasyona eklendi.' }) });
             loadUsers();
+            loadOrganisations();
             loadOrganisationUsers(organisationId);
         } catch (err) {
             setOrgMessage(organisationId, { error: err instanceof Error ? err.message : t({ de: 'Benutzer konnte nicht hinzugefügt werden.', en: 'User could not be added.', tr: 'Kullanıcı eklenemedi.' }) });
@@ -604,12 +680,24 @@ export default function SuperAdminPage() {
     };
 
     const handleRemoveUserFromOrganisation = async (user: User) => {
-        if (user.id === currentUser?.id || !user.organisationId) return;
-        const org = getUserOrganisation(user);
+        if (!user.organisationId) return;
+        const org = getUserOrganisation(user)!;
         if (!org) return;
+        const isOrganisationAdmin = org.ownerUserId === user.id;
+        if (false && isOrganisationAdmin) {
+            setOrgMessage(org.id, { error: t({ de: 'Der Organisations-Admin kann nicht aus der Organisation entfernt werden.', en: 'The organisation admin cannot be removed from the organisation.', tr: 'Organizasyon yöneticisi organizasyondan kaldırılamaz.' }) });
+            return;
+        }
         if (!confirm(t({ de: `Soll ${user.name} wirklich aus der Organisation "${org.name}" entfernt werden? Alle Projektmitgliedschaften in dieser Organisation werden ebenfalls aufgelöst.`, en: `Do you really want to remove ${user.name} from the organisation "${org.name}"? All project memberships in this organisation will also be removed.`, tr: `${user.name} gerçekten "${org.name}" organizasyonundan kaldırılsın mı? Bu organizasyondaki tüm proje üyelikleri de kaldırılacak.` }))) return;
         try {
             setOrgMessage(org.id, {});
+            if (isOrganisationAdmin) {
+                const nextOwnerId = await api.transferOrganisationAdmin(org.id, user.id);
+                if (!nextOwnerId) {
+                    setOrgMessage(org.id, { error: t({ de: 'Bitte zuerst einen anderen Benutzer zur Organisation hinzufügen. Eine Organisation braucht immer einen Admin.', en: 'Please add another user to the organisation first. An organisation always needs an admin.', tr: 'Lütfen önce organizasyona başka bir kullanıcı ekleyin. Bir organizasyonun her zaman bir yöneticisi olmalıdır.' }) });
+                    return;
+                }
+            }
             const companies = orgCompanies[org.id] ?? await api.fetchOrganisationCompanies(org.id);
             for (const company of companies) {
                 const members = await api.fetchCompanyMembers(company.id);
@@ -654,11 +742,29 @@ export default function SuperAdminPage() {
                     {t({ de: 'Benutzer', en: 'Users', tr: 'Kullanıcılar' })} ({usersInOrg.length})
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    <input
+                        className="form-input"
+                        list={`org-user-options-${orgId}`}
+                        value={addToOrgUserSearch[orgId] ?? ''}
+                        onChange={e => {
+                            const value = e.target.value;
+                            const matchedUser = findUserFromSearch(value, availableUsers);
+                            setAddToOrgUserSearch(prev => ({ ...prev, [orgId]: value }));
+                            setAddToOrgUserId(prev => ({ ...prev, [orgId]: matchedUser?.id ?? '' }));
+                        }}
+                        placeholder={t({ de: 'Name oder E-Mail suchen...', en: 'Search name or email...', tr: 'Ad veya e-posta ara...' })}
+                        style={{ minWidth: '260px', fontSize: '0.72rem' }}
+                    />
+                    <datalist id={`org-user-options-${orgId}`}>
+                        {availableUsers.map(user => (
+                            <option key={user.id} value={userOptionLabel(user)} />
+                        ))}
+                    </datalist>
                     <select
                         className="form-select"
                         value={addToOrgUserId[orgId] ?? ''}
                         onChange={e => setAddToOrgUserId(prev => ({ ...prev, [orgId]: e.target.value }))}
-                        style={{ minWidth: '220px', fontSize: '0.72rem' }}
+                        style={{ display: 'none' }}
                     >
                         <option value="">{t({ de: 'Benutzer zur Organisation hinzufügen...', en: 'Add user to organisation...', tr: 'Organizasyona kullanıcı ekle...' })}</option>
                         {availableUsers.map(user => (
@@ -670,7 +776,7 @@ export default function SuperAdminPage() {
                     <button
                         className="btn btn-primary btn-sm"
                         onClick={() => handleAssignUserToOrganisation(orgId)}
-                        disabled={!addToOrgUserId[orgId]}
+                        disabled={!addToOrgUserId[orgId] && !findUserFromSearch(addToOrgUserSearch[orgId] ?? '', availableUsers)}
                     >
                         <UserPlus size={14} /> {t({ de: 'Hinzufügen', en: 'Add', tr: 'Ekle' })}
                     </button>
@@ -771,6 +877,16 @@ export default function SuperAdminPage() {
                                                 )}
                                             </>
                                         )}
+                                        {isMe && user.organisationId && (
+                                            <button
+                                                className="btn btn-ghost btn-sm"
+                                                style={{ color: 'var(--text-tertiary)', padding: '4px 6px' }}
+                                                onClick={() => handleRemoveUserFromOrganisation(user)}
+                                                title={t({ de: 'Mich aus Organisation entfernen', en: 'Remove me from organisation', tr: 'Beni organizasyondan kaldır' })}
+                                            >
+                                                <UserMinus size={14} />
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             );
@@ -829,6 +945,33 @@ export default function SuperAdminPage() {
                                     </button>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                                    <input
+                                        className="form-input"
+                                        list={`company-user-options-${company.id}`}
+                                        value={assignSearchByCompany[company.id] ?? ''}
+                                        onChange={e => {
+                                            const value = e.target.value;
+                                            const availableUsersForCompany = users.filter(user => !(companyMembers[company.id] ?? []).some(member => member.userId === user.id));
+                                            const matchedUser = findUserFromSearch(value, availableUsersForCompany);
+                                            setAssignSearchByCompany(prev => ({ ...prev, [company.id]: value }));
+                                            setAssignByCompany(prev => ({
+                                                ...prev,
+                                                [company.id]: {
+                                                    userId: matchedUser?.id ?? '',
+                                                    role: prev[company.id]?.role ?? 'member',
+                                                },
+                                            }));
+                                        }}
+                                        placeholder={t({ de: 'Name oder E-Mail suchen...', en: 'Search name or email...', tr: 'Ad veya e-posta ara...' })}
+                                        style={{ minWidth: '260px', fontSize: '0.72rem' }}
+                                    />
+                                    <datalist id={`company-user-options-${company.id}`}>
+                                        {users
+                                            .filter(user => !(companyMembers[company.id] ?? []).some(member => member.userId === user.id))
+                                            .map(user => (
+                                                <option key={user.id} value={userOptionLabel(user)} />
+                                            ))}
+                                    </datalist>
                                     <select
                                         className="form-select"
                                         value={assignByCompany[company.id]?.userId ?? ''}
@@ -839,7 +982,7 @@ export default function SuperAdminPage() {
                                                 role: prev[company.id]?.role ?? 'member',
                                             },
                                         }))}
-                                        style={{ minWidth: '200px', fontSize: '0.72rem' }}
+                                        style={{ display: 'none' }}
                                     >
                                         <option value="">{t({ de: 'Benutzer wählen', en: 'Select user', tr: 'Kullanıcı seç' })}</option>
                                         {users
@@ -883,9 +1026,10 @@ export default function SuperAdminPage() {
                                             const roleCfg = ROLE_CONFIG[member.role];
                                             const adminCount = (companyMembers[company.id] ?? []).filter(m => m.role === 'company_admin').length;
                                             const isLastAdmin = member.role === 'company_admin' && adminCount <= 1;
+                                            const isOrganisationAdmin = organisations.find(org => org.id === orgId)?.ownerUserId === member.userId;
                                             const isCurrentUserInActiveCompany =
                                                 member.userId === currentUser?.id && activeCompany?.id === company.id;
-                                            const removeDisabled = isLastAdmin || isCurrentUserInActiveCompany;
+                                            const removeDisabled = isLastAdmin && !isOrganisationAdmin;
                                             const removeTitle = isLastAdmin
                                                 ? t({ de: 'Letzten Admin kann man nicht entfernen', en: 'Cannot remove the last admin', tr: 'Son admin kaldırılamaz' })
                                                 : isCurrentUserInActiveCompany
@@ -913,7 +1057,8 @@ export default function SuperAdminPage() {
                                                     <select
                                                         className="form-select"
                                                         value={member.role}
-                                                        onChange={e => handleUpdateCompanyMemberRole(company.id, member.memberId, e.target.value as CompanyRole)}
+                                                        onChange={e => handleUpdateCompanyMemberRole(orgId, company.id, member.memberId, e.target.value as CompanyRole)}
+                                                        disabled={isOrganisationAdmin}
                                                         style={{ minWidth: '110px', fontSize: '0.7rem', width: '110px' }}
                                                     >
                                                         <option value="company_admin">Admin</option>
@@ -931,7 +1076,7 @@ export default function SuperAdminPage() {
                                                     <button
                                                         className="btn btn-ghost btn-sm"
                                                         style={{ color: 'var(--color-danger)', padding: '4px 6px', justifySelf: 'end' }}
-                                                        onClick={() => handleRemoveCompanyMember(company.id, member.memberId, member.userName)}
+                                                        onClick={() => handleRemoveCompanyMember(orgId, company.id, member.memberId, member.userName)}
                                                         title={removeTitle}
                                                         disabled={removeDisabled}
                                                     >
@@ -1127,7 +1272,8 @@ export default function SuperAdminPage() {
                             ) : (
                                 filteredOrganisations.map(org => {
                                     const sub = orgSubscription(org.id);
-                                    const currentPlanName = allPlans.find(p => p.id === sub?.planId)?.name ?? t({ de: 'Kein Plan', en: 'No plan', tr: 'Plan yok' });
+                                    const currentPlanId = org.planId ?? sub?.planId ?? null;
+                                    const currentPlanName = allPlans.find(p => p.id === currentPlanId)?.name ?? t({ de: 'Kein Plan', en: 'No plan', tr: 'Plan yok' });
                                     const userCount = (orgUsers[org.id] ?? []).length;
                                     const companyCount = (orgCompanies[org.id] ?? []).length;
                                     return (
@@ -1243,7 +1389,7 @@ export default function SuperAdminPage() {
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto' }}>
                                                         <select
                                                             className="form-select"
-                                                            value={sub?.planId ?? ''}
+                                                            value={currentPlanId ?? ''}
                                                             onChange={e => handleApplyOrganisationPlan(org, e.target.value)}
                                                             style={{ minWidth: '140px', fontSize: '0.72rem' }}
                                                         >
@@ -1294,6 +1440,7 @@ export default function SuperAdminPage() {
                                     const isMe = user.id === currentUser?.id;
                                     const org = getUserOrganisation(user);
                                     const sub = org ? orgSubscription(org.id) : null;
+                                    const currentPlanId = org?.planId ?? sub?.planId ?? null;
                                     return (
                                         <div key={user.id} className="card" style={{
                                             padding: '16px',
@@ -1389,7 +1536,7 @@ export default function SuperAdminPage() {
                                                         </select>
                                                         {allPlans.length > 0 && org && (
                                                             <select
-                                                                value={org.requestedPlanId ?? sub?.planId ?? ''}
+                                                                value={org.requestedPlanId ?? currentPlanId ?? ''}
                                                                 onChange={(e) => handleChangeUserPlan(user, e.target.value)}
                                                                 disabled={isMe}
                                                                 style={{
@@ -1410,7 +1557,7 @@ export default function SuperAdminPage() {
                                                                 ))}
                                                             </select>
                                                         )}
-                                                        {org?.requestedPlanId && org.requestedPlanId !== (sub?.planId ?? '') && !user.isActive && (
+                                                        {org?.requestedPlanId && org.requestedPlanId !== (currentPlanId ?? '') && !user.isActive && (
                                                             <span style={{
                                                                 fontSize: '0.6rem', padding: '1px 5px',
                                                                 borderRadius: 'var(--radius-full)',

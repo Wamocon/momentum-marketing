@@ -252,7 +252,7 @@ function toCamelPlan(r: Record<string, unknown>): Plan {
 function toCamelSubscription(r: Record<string, unknown>): Subscription {
   return {
     id: r.id as string,
-    organisationId: r.organisation_id as string,
+    organisationId: (r.organisation_id as string | undefined) ?? '',
     planId: r.plan_id as string,
     status: r.status as Subscription['status'],
     currentSeats: r.current_seats as number,
@@ -268,6 +268,40 @@ function toCamelSubscription(r: Record<string, unknown>): Subscription {
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
+}
+
+function createPlanBackedSubscription(organisationId: string, plan: Plan): Subscription {
+  const nowIso = new Date().toISOString();
+  return {
+    id: '',
+    organisationId,
+    planId: plan.id,
+    status: 'active',
+    currentSeats: 1,
+    currentProjects: 1,
+    extraSocialAccounts: 0,
+    billingCycle: 'monthly',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    plan,
+  };
+}
+
+async function fetchPlanById(planId: string): Promise<Plan | null> {
+  const { data, error } = await supabase
+    .from('plans')
+    .select('*')
+    .eq('id', planId)
+    .single();
+  if (error || !data) return null;
+  return toCamelPlan(data as Record<string, unknown>);
+}
+
+async function attachSubscriptionPlan(sub: Subscription): Promise<Subscription> {
+  if (!sub.planId) return sub;
+  const plan = await fetchPlanById(sub.planId);
+  if (plan) sub.plan = plan;
+  return sub;
 }
 
 function toCamelConnectedAccount(r: Record<string, unknown>): ConnectedAccount {
@@ -1151,6 +1185,10 @@ export async function updateOrganisation(id: string, updates: Partial<Organisati
 }
 
 export async function deleteOrganisation(id: string): Promise<void> {
+  const users = await fetchOrganisationUsers(id);
+  for (const user of users) {
+    await assignUserToOrganisation(user.id, null);
+  }
   const { error } = await supabase.from('organisations').delete().eq('id', id);
   if (error) throw error;
 }
@@ -1170,6 +1208,77 @@ export async function fetchOrganisationCompanies(organisationId: string): Promis
 export async function assignUserToOrganisation(userId: string, organisationId: string | null): Promise<void> {
   const { error } = await supabase.from('users').update({ organisation_id: organisationId }).eq('id', userId);
   if (error) throw error;
+}
+
+export async function ensureCompanyMemberRole(
+  companyId: string,
+  userId: string,
+  role: CompanyRole,
+): Promise<CompanyMember> {
+  const { data: existing, error: fetchError } = await supabase
+    .from('company_members')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .single();
+
+  if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
+
+  if (existing) {
+    const member = toCamelCompanyMember(existing);
+    if (member.role !== role) {
+      await updateCompanyMemberRole(member.id, role);
+      return { ...member, role };
+    }
+    return member;
+  }
+
+  const id = generateId();
+  const { data, error } = await supabase.from('company_members').insert({
+    id,
+    company_id: companyId,
+    user_id: userId,
+    role,
+  }).select().single();
+  if (error) throw error;
+  return toCamelCompanyMember(data);
+}
+
+export async function syncOrganisationAdmin(organisationId: string): Promise<void> {
+  const organisation = await fetchOrganisationById(organisationId);
+  if (!organisation) return;
+
+  let ownerUserId = organisation.ownerUserId;
+  if (!ownerUserId) {
+    const users = await fetchOrganisationUsers(organisationId);
+    ownerUserId = users.find(user => user.role === 'company_admin')?.id ?? users[0]?.id ?? null;
+    if (!ownerUserId) return;
+    await updateOrganisation(organisationId, { ownerUserId });
+  }
+
+  await assignUserToOrganisation(ownerUserId, organisationId);
+
+  const companies = await fetchOrganisationCompanies(organisationId);
+  for (const company of companies) {
+    await ensureCompanyMemberRole(company.id, ownerUserId, 'company_admin');
+  }
+}
+
+export async function transferOrganisationAdmin(
+  organisationId: string,
+  excludeUserId?: string,
+): Promise<string | null> {
+  const users = await fetchOrganisationUsers(organisationId);
+  const nextOwner = users.find(user =>
+    user.id !== excludeUserId && user.isActive && user.role === 'company_admin',
+  ) ?? users.find(user => user.id !== excludeUserId && user.isActive)
+    ?? users.find(user => user.id !== excludeUserId)
+    ?? null;
+
+  if (!nextOwner) return null;
+  await updateOrganisation(organisationId, { ownerUserId: nextOwner.id });
+  await syncOrganisationAdmin(organisationId);
+  return nextOwner.id;
 }
 
 export async function assignCompanyToOrganisation(companyId: string, organisationId: string | null): Promise<void> {
@@ -1235,6 +1344,10 @@ export async function updateCompanyRequestedPlan(_companyId: string, _planId: st
 }
 
 export async function deleteCompany(id: string): Promise<void> {
+  const members = await fetchCompanyMembers(id);
+  for (const member of members) {
+    await removeCompanyMember(member.id);
+  }
   const { error } = await supabase.from('companies').delete().eq('id', id);
   if (error) throw error;
 }
@@ -1285,6 +1398,7 @@ export async function assertSeatLimitForAdd(
 
 export async function addCompanyMember(companyId: string, userId: string, role: CompanyRole): Promise<CompanyMember> {
   await assertSeatLimitForAdd(companyId, role, { excludeUserId: userId });
+  const company = await fetchCompanyById(companyId);
   const id = generateId();
   const { data, error } = await supabase.from('company_members').insert({
     id,
@@ -1293,6 +1407,9 @@ export async function addCompanyMember(companyId: string, userId: string, role: 
     role,
   }).select().single();
   if (error) throw error;
+  if (company?.organisationId) {
+    await assignUserToOrganisation(userId, company.organisationId);
+  }
   return toCamelCompanyMember(data);
 }
 
@@ -1464,6 +1581,24 @@ export async function registerUser(input: RegisterUserInput): Promise<User> {
 }
 
 export async function deleteUser(userId: string): Promise<void> {
+  const ownedOrganisations = await fetchOrganisations().then(orgs => orgs.filter(org => org.ownerUserId === userId));
+  for (const organisation of ownedOrganisations) {
+    const nextOwnerId = await transferOrganisationAdmin(organisation.id, userId);
+    if (!nextOwnerId) {
+      throw new Error('Organisationen brauchen mindestens einen Admin. Bitte zuerst einen anderen Benutzer zur Organisation hinzufügen.');
+    }
+  }
+
+  const companies = await fetchCompanies();
+  for (const company of companies) {
+    const members = await fetchCompanyMembers(company.id);
+    const member = members.find(item => item.userId === userId);
+    if (member) {
+      await removeCompanyMember(member.id);
+    }
+  }
+
+  await assignUserToOrganisation(userId, null);
   const { error } = await supabase.from('users').delete().eq('id', userId);
   if (error) throw error;
 }
@@ -1488,31 +1623,66 @@ export async function fetchAllSubscriptions(): Promise<Subscription[]> {
   return (data ?? []).map(toCamelSubscription);
 }
 
-export async function fetchSubscription(organisationId: string): Promise<Subscription | null> {
-  // Fetch subscription (without FK join — PostgREST may not see the relationship)
+async function fetchStoredSubscription(organisationId: string): Promise<Subscription | null> {
   const { data, error } = await supabase
     .from('subscriptions')
     .select('*')
     .eq('organisation_id', organisationId)
     .single();
-  if (error && error.code !== 'PGRST116') throw error; // PGRST116 = not found
-  if (!data) return null;
-  const sub = toCamelSubscription(data);
+  if (error && error.code !== 'PGRST116') throw error;
+  return data ? toCamelSubscription(data) : null;
+}
 
-  // Manually fetch the associated plan
-  if (sub.planId) {
-    const { data: planData } = await supabase
-      .from('plans')
-      .select('*')
-      .eq('id', sub.planId)
-      .single();
-    if (planData) sub.plan = toCamelPlan(planData as Record<string, unknown>);
+export async function fetchSubscription(organisationId: string): Promise<Subscription | null> {
+  // Fetch subscription (without FK join — PostgREST may not see the relationship)
+  const sub = await fetchStoredSubscription(organisationId);
+  if (!sub) {
+    const organisation = await fetchOrganisationById(organisationId);
+    if (!organisation?.planId) return null;
+    const plan = await fetchPlanById(organisation.planId);
+    return plan ? createPlanBackedSubscription(organisationId, plan) : null;
   }
-  return sub;
+  return attachSubscriptionPlan(sub);
 }
 
 export async function fetchOrganisationSubscription(organisationId: string): Promise<Subscription | null> {
   return fetchSubscription(organisationId);
+}
+
+export async function fetchCompanySubscription(
+  companyId: string,
+  organisationId?: string | null,
+): Promise<Subscription | null> {
+  if (organisationId) {
+    const organisationSubscription = await fetchSubscription(organisationId);
+    if (organisationSubscription) return organisationSubscription;
+  }
+
+  const { data, error } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .eq('company_id', companyId)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    const message = String(error.message ?? '').toLowerCase();
+    if (!message.includes('company_id') && !message.includes('column')) {
+      throw error;
+    }
+  }
+
+  if (data) {
+    return attachSubscriptionPlan(toCamelSubscription(data));
+  }
+
+  if (!organisationId) {
+    const company = await fetchCompanyById(companyId);
+    if (company?.organisationId) {
+      return fetchSubscription(company.organisationId);
+    }
+  }
+
+  return null;
 }
 
 export async function createSubscription(
@@ -1559,20 +1729,35 @@ export async function updateSubscription(id: string, updates: Partial<{
   if (error) throw error;
 }
 
-export async function ensureSubscription(organisationId: string, planId: string, status: SubscriptionStatus = 'active'): Promise<void> {
-  const existing = await fetchSubscription(organisationId);
-  if (existing) {
-    await updateSubscription(existing.id, { planId, status });
-  } else {
-    await createSubscription(organisationId, planId, 'monthly');
-    // createSubscription sets status to active by default; override if needed.
-    if (status !== 'active') {
-      const created = await fetchSubscription(organisationId);
-      if (created) {
-        await updateSubscription(created.id, { status });
-      }
+export async function applyOrganisationPlan(
+  organisationId: string,
+  planId: string,
+  options: { status?: SubscriptionStatus; clearRequestedPlan?: boolean } = {},
+): Promise<void> {
+  const status = options.status ?? 'active';
+  await updateOrganisation(organisationId, {
+    planId,
+    ...(options.clearRequestedPlan === false ? {} : { requestedPlanId: null }),
+  });
+
+  try {
+    const existing = await fetchStoredSubscription(organisationId);
+    if (existing?.id) {
+      await updateSubscription(existing.id, { planId, status });
+      return;
     }
+
+    const created = await createSubscription(organisationId, planId, 'monthly');
+    if (status !== 'active') {
+      await updateSubscription(created.id, { status });
+    }
+  } catch (err) {
+    console.warn('Could not sync subscription row after organisation plan update:', err);
   }
+}
+
+export async function ensureSubscription(organisationId: string, planId: string, status: SubscriptionStatus = 'active'): Promise<void> {
+  await applyOrganisationPlan(organisationId, planId, { status, clearRequestedPlan: false });
 }
 
 // ─── Connected Social Accounts ─────────────────────────────

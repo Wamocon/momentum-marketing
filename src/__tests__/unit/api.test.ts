@@ -106,6 +106,79 @@ const dbStage = {
   pain_points: [], metrics: {}, content_ids: [],
 };
 
+const dbUltimatePlan = {
+  id: 'plan-ultimate',
+  name: 'Ultimate',
+  slug: 'ultimate',
+  description: 'Full platform',
+  price_monthly_cents: 14900,
+  price_yearly_cents: 149000,
+  max_seats: 10,
+  max_projects: 10,
+  included_social_accounts: 4,
+  features: { core: true, ai_pro: true, linkedin: true, instagram: true, max_ai_generations_month: -1 },
+  is_active: true,
+  sort_order: 3,
+};
+
+const dbOrganisation = {
+  id: 'org-wamocon',
+  name: 'WAMOCON',
+  slug: 'wamocon',
+  owner_user_id: 'u1',
+  plan_id: 'plan-ultimate',
+  requested_plan_id: null,
+  status: 'active',
+  created_at: '2026-01-01',
+  updated_at: '2026-01-01',
+};
+
+const dbLegacyCompanySubscription = {
+  id: 'sub-wamocon',
+  company_id: 'company-wamocon',
+  plan_id: 'plan-ultimate',
+  status: 'active',
+  current_seats: 4,
+  current_projects: 1,
+  extra_social_accounts: 0,
+  billing_cycle: 'monthly',
+  created_at: '2026-01-01',
+  updated_at: '2026-01-01',
+};
+
+const dbOrganisationSubscription = {
+  id: 'sub-org-wamocon',
+  organisation_id: 'org-wamocon',
+  plan_id: 'plan-ultimate',
+  status: 'active',
+  current_seats: 10,
+  current_projects: 5,
+  extra_social_accounts: 0,
+  billing_cycle: 'monthly',
+  created_at: '2026-01-01',
+  updated_at: '2026-01-01',
+};
+
+const dbCompany = {
+  id: 'company-wamocon',
+  name: 'WAMOCON Academy',
+  slug: 'wamocon-academy',
+  logo: 'W',
+  description: '',
+  industry: 'Education',
+  created_by: 'u1',
+  organisation_id: 'org-wamocon',
+  created_at: '2026-01-01',
+};
+
+const dbCompanyAdminMember = {
+  id: 'member-admin',
+  company_id: 'company-wamocon',
+  user_id: 'u1',
+  role: 'company_admin',
+  joined_at: '2026-01-01',
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Users
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,6 +288,71 @@ describe('updateUserStatus()', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Touchpoints
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe('subscriptions', () => {
+  it('uses the organisation plan when no subscription row exists', async () => {
+    mockFromOnce([
+      { data: null, error: { code: 'PGRST116' } },
+      { data: dbOrganisation, error: null },
+      { data: dbUltimatePlan, error: null },
+    ]);
+
+    const subscription = await api.fetchSubscription('org-wamocon');
+
+    expect(subscription?.id).toBe('');
+    expect(subscription?.planId).toBe('plan-ultimate');
+    expect(subscription?.plan?.slug).toBe('ultimate');
+  });
+
+  it('resolves a legacy company-based subscription for the selected project', async () => {
+    mockFromOnce([
+      { data: dbLegacyCompanySubscription, error: null },
+      { data: dbUltimatePlan, error: null },
+    ]);
+
+    const subscription = await api.fetchCompanySubscription('company-wamocon');
+
+    expect(subscription?.id).toBe('sub-wamocon');
+    expect(subscription?.plan?.name).toBe('Ultimate');
+    expect(subscription?.plan?.slug).toBe('ultimate');
+  });
+
+  it('approves an organisation plan by syncing organisation and visible subscription rows', async () => {
+    mockFromOnce([
+      { data: null, error: null },
+      { data: dbOrganisationSubscription, error: null },
+      { data: null, error: null },
+    ]);
+
+    await expect(api.applyOrganisationPlan('org-wamocon', 'plan-ultimate')).resolves.toBeUndefined();
+  });
+
+  it('still approves the organisation plan when the subscription row is hidden', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mockFromOnce([
+      { data: null, error: null },
+      { data: null, error: { code: 'PGRST116' } },
+      { data: null, error: new Error('duplicate key value violates unique constraint') },
+    ]);
+
+    await expect(api.applyOrganisationPlan('org-wamocon', 'plan-ultimate')).resolves.toBeUndefined();
+    warn.mockRestore();
+  });
+});
+
+describe('organisation admin sync', () => {
+  it('keeps the organisation owner in the organisation and every project as admin', async () => {
+    mockFromOnce([
+      { data: dbOrganisation, error: null },
+      { data: null, error: null },
+      { data: [dbCompany], error: null },
+      { data: null, error: { code: 'PGRST116' } },
+      { data: dbCompanyAdminMember, error: null },
+    ]);
+
+    await expect(api.syncOrganisationAdmin('org-wamocon')).resolves.toBeUndefined();
+  });
+});
 
 describe('fetchTouchpoints()', () => {
   // BRANCH: null data → [] (data ?? [])

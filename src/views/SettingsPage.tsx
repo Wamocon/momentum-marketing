@@ -759,6 +759,7 @@ export default function SettingsPage() {
                                         {companyMembers.map(member => {
                                             const cfg = ROLE_CONFIG[member.role];
                                             const isMe = member.userId === currentUser?.id;
+                                            const isSelfProtected = isMe && !isSuperAdmin;
                                             const isProtectedSuperAdmin = member.userIsSuperAdmin && !isSuperAdmin;
                                             return (
                                             <tr key={member.id}>
@@ -814,7 +815,7 @@ export default function SettingsPage() {
                                                             <select
                                                                 value={member.role}
                                                                 onChange={e => handleRoleUpdate(member.id, e.target.value as 'company_admin' | 'manager' | 'member')}
-                                                                disabled={isMe || isProtectedSuperAdmin}
+                                                                disabled={isSelfProtected || isProtectedSuperAdmin}
                                                                 className="form-select"
                                                                 style={{ minWidth: '125px' }}
                                                                 title={isProtectedSuperAdmin ? t({ de: 'Super-Admin-Rollen dürfen nur von Super-Admins angepasst werden.', en: 'Super admin roles can only be adjusted by super admins.', tr: 'Süper yönetici rolleri yalnızca süper yöneticiler tarafından değiştirilebilir.' }) : ''}
