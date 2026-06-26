@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import type { ContentItem } from '../types';
+import { useState, useRef } from 'react';
+import type { DragEvent } from 'react';
+import type { ContentItem, ContentStatus } from '../types';
 import { Plus, Calendar, AlertTriangle, CheckCircle, FileText, Filter, X, LayoutGrid, GripVertical, Wand2 } from 'lucide-react';
 import { useContents, CONTENT_STATUSES, CONTENT_STATUS_ORDER } from '../context/ContentContext';
 import { useTasks } from '../context/TaskContext';
@@ -82,10 +83,10 @@ const CONTENT_STATUS_MODEL = [
 ];
 
 export default function ContentOverviewPage() {
-    const { contents } = useContents();
+    const { contents, updateContent } = useContents();
     const { tasks } = useTasks();
     const { can } = useAuth();
-    const { language, locale, t } = useLanguage();
+    const { locale, t } = useLanguage();
     const { campaigns, touchpoints } = useData();
     const { activeCompany } = useCompany();
     const router = useRouter();
@@ -94,6 +95,55 @@ export default function ContentOverviewPage() {
     const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null);
     const [viewMode, setViewMode] = useState<'grid' | 'kanban'>('grid');
     const [showNewContent, setShowNewContent] = useState(false);
+
+    const draggingContentId = useRef<string | null>(null);
+    const [dragOverStatus, setDragOverStatus] = useState<ContentStatus | null>(null);
+
+    const canEditContent = can('canEditContent');
+
+    const handleDragStart = (e: DragEvent<HTMLDivElement>, contentId: string) => {
+        draggingContentId.current = contentId;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', contentId);
+        requestAnimationFrame(() => {
+            (e.target as HTMLElement).style.opacity = '0.35';
+        });
+    };
+
+    const handleDragEnd = (e: DragEvent<HTMLDivElement>) => {
+        draggingContentId.current = null;
+        setDragOverStatus(null);
+        (e.target as HTMLElement).style.opacity = '';
+    };
+
+    const handleColumnDragOver = (e: DragEvent<HTMLDivElement>, status: ContentStatus) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setDragOverStatus(status);
+    };
+
+    const handleColumnDragLeave = (e: DragEvent<HTMLDivElement>) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setDragOverStatus(null);
+        }
+    };
+
+    const handleColumnDrop = async (e: DragEvent<HTMLDivElement>, status: ContentStatus) => {
+        e.preventDefault();
+        const contentId = e.dataTransfer.getData('text/plain') || draggingContentId.current;
+        if (contentId) {
+            const content = contents.find(c => c.id === contentId);
+            if (content && content.status !== status) {
+                try {
+                    await updateContent(contentId, { status });
+                } catch (err) {
+                    console.error('Failed to update content status:', err);
+                }
+            }
+        }
+        draggingContentId.current = null;
+        setDragOverStatus(null);
+    };
 
     const getCampaignName = (cId) => {
         if (!cId) return t({ de: 'Ohne Kampagne', en: 'No campaign', tr: 'Kampanya yok' });
@@ -149,6 +199,7 @@ export default function ContentOverviewPage() {
                         <ul className="help-list">
                             <li><strong>{t({ de: 'KPI Board', en: 'KPI board', tr: 'KPI Panosu' })}:</strong> {t({ de: 'Du siehst direkt, welcher Content bereits safe eingeplant ist und wie viele Posts in der Pipeline liegen.', en: 'See scheduled content and pipeline volume instantly.', tr: 'Planlanan içerikleri ve pipeline hacmini anında görün.' })}</li>
                             <li><strong>{t({ de: 'Filtern', en: 'Filters', tr: 'Filtreler' })}:</strong> {t({ de: 'Suche gezielt nach ohne Aufgaben oder filter den Status auf fertige Assets.', en: 'Find content without tasks or narrow down by status.', tr: 'Görevsiz içerikleri bulun veya duruma göre daraltın.' })}</li>
+                            <li><strong>{t({ de: 'Kanban per Drag & Drop', en: 'Kanban drag & drop', tr: 'Kanban surukle birak' })}:</strong> {t({ de: 'In der Kanban-Ansicht kannst du Content-Karten per Drag & Drop in eine andere Status-Spalte verschieben.', en: 'In the Kanban view, drag content cards to another status column to update their status.', tr: 'Kanban gorunumunde icerik kartlarini baska bir durum sutununa surukleyerek durumunu guncelleyin.' })}</li>
                         </ul>
                     </PageHelp>
                     {can('canEditContent') && (
@@ -344,12 +395,20 @@ export default function ContentOverviewPage() {
                             return true;
                         });
                         return (
-                            <div key={status} style={{
-                                flex: '0 0 260px', minWidth: '220px',
-                                background: 'var(--bg-elevated)',
-                                borderRadius: 'var(--radius-lg)',
-                                border: '1px solid var(--border-color)',
-                            }}>
+                            <div key={status}
+                                onDragOver={(e) => handleColumnDragOver(e, status)}
+                                onDragLeave={handleColumnDragLeave}
+                                onDrop={(e) => handleColumnDrop(e, status)}
+                                style={{
+                                    flex: '0 0 260px', minWidth: '220px',
+                                    background: 'var(--bg-elevated)',
+                                    borderRadius: 'var(--radius-lg)',
+                                    border: dragOverStatus === status
+                                        ? `2px dashed ${st.color}`
+                                        : '1px solid var(--border-color)',
+                                    backgroundColor: dragOverStatus === status ? `${st.color}12` : undefined,
+                                    transition: 'border-color 0.15s, background-color 0.15s',
+                                }}>
                                 {/* Column header */}
                                 <div style={{
                                     padding: '14px 16px 12px',
@@ -375,13 +434,18 @@ export default function ContentOverviewPage() {
                                         const hasTasks = cnt.taskIds && cnt.taskIds.length > 0;
                                         const isCritical = !hasTasks;
                                         return (
-                                            <div key={cnt.id} onClick={() => setSelectedContent(cnt)} style={{
-                                                background: isCritical ? '#b91c1c' : 'var(--bg-base)',
-                                                borderRadius: 'var(--radius-md)',
-                                                padding: '12px', cursor: 'pointer', transition: 'all 0.15s',
-                                                border: `1px solid ${isCritical ? '#991b1b' : 'var(--border-color)'}`,
-                                                borderLeft: hasTasks ? `3px solid ${st.color}` : '3px solid #991b1b',
-                                            }}
+                                            <div key={cnt.id}
+                                                draggable={canEditContent}
+                                                onDragStart={canEditContent ? (e) => handleDragStart(e, cnt.id) : undefined}
+                                                onDragEnd={canEditContent ? handleDragEnd : undefined}
+                                                onClick={() => setSelectedContent(cnt)}
+                                                style={{
+                                                    background: isCritical ? '#b91c1c' : 'var(--bg-base)',
+                                                    borderRadius: 'var(--radius-md)',
+                                                    padding: '12px', cursor: canEditContent ? 'grab' : 'pointer', transition: 'all 0.15s',
+                                                    border: `1px solid ${isCritical ? '#991b1b' : 'var(--border-color)'}`,
+                                                    borderLeft: hasTasks ? `3px solid ${st.color}` : '3px solid #991b1b',
+                                                }}
                                                 onMouseEnter={e => (e.currentTarget.style.boxShadow = 'var(--shadow-md)')}
                                                 onMouseLeave={e => (e.currentTarget.style.boxShadow = '')}
                                             >
