@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '../../../../src/lib/supabase';
 import { hashPassword, toSafeUser } from '../../../../src/lib/serverAuth';
+import { describeDbError, isSchemaOutOfDateError, isUniqueViolation } from '../../../../src/lib/dbDiagnostics';
 
 export async function POST(request: Request) {
   try {
@@ -26,12 +27,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Bitte Name, E-Mail und ein Passwort mit mindestens 8 Zeichen angeben.' }, { status: 400 });
     }
 
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('users')
       .select('id')
       .eq('email', email)
-      .single();
+      .maybeSingle();
 
+    if (existingError) {
+      console.error('Create user lookup error:', describeDbError(existingError));
+      return NextResponse.json({ error: 'Benutzer konnte nicht erstellt werden.' }, { status: 500 });
+    }
     if (existing) {
       return NextResponse.json({ error: 'Diese E-Mail-Adresse ist bereits registriert.' }, { status: 409 });
     }
@@ -63,7 +68,16 @@ export async function POST(request: Request) {
       .single();
 
     if (error || !user) {
-      console.error('Create user error:', error);
+      console.error('Create user error:', describeDbError(error));
+      if (isUniqueViolation(error)) {
+        return NextResponse.json({ error: 'Diese E-Mail-Adresse ist bereits registriert.' }, { status: 409 });
+      }
+      if (isSchemaOutOfDateError(error)) {
+        return NextResponse.json(
+          { error: 'Die Datenbank ist nicht auf dem erwarteten Stand.', code: 'schema_out_of_date' },
+          { status: 503 },
+        );
+      }
       return NextResponse.json({ error: 'Benutzer konnte nicht erstellt werden.' }, { status: 500 });
     }
 

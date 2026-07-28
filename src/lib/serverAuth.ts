@@ -5,10 +5,26 @@ import type { User } from '../types';
 
 const JWT_SECRET = process.env.MOMENTUM_AUTH_SECRET;
 const COOKIE_NAME = 'momentum_session';
+const DEV_FALLBACK_SECRET = 'momentum-local-dev-secret-min-32-chars-long!!';
+const MIN_SECRET_LENGTH = 32;
 
+/**
+ * The dev fallback below is committed to this repository, so anyone could sign
+ * a valid momentum_session cookie for any user (including a super-admin) if it
+ * were ever used in production. Refuse to run instead. This throws per request
+ * rather than at module load so that builds without the secret still succeed.
+ */
 function getSecret(): Uint8Array {
-  const raw = JWT_SECRET ?? 'momentum-local-dev-secret-min-32-chars-long!!';
-  return new TextEncoder().encode(raw);
+  if (process.env.NODE_ENV === 'production') {
+    if (!JWT_SECRET || JWT_SECRET.length < MIN_SECRET_LENGTH) {
+      throw new Error(
+        `MOMENTUM_AUTH_SECRET is missing or shorter than ${MIN_SECRET_LENGTH} characters. ` +
+        'Set it in the deployment environment before serving authenticated traffic.',
+      );
+    }
+    return new TextEncoder().encode(JWT_SECRET);
+  }
+  return new TextEncoder().encode(JWT_SECRET ?? DEV_FALLBACK_SECRET);
 }
 
 export async function hashPassword(password: string): Promise<string> {

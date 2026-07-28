@@ -1,7 +1,403 @@
 ﻿
+
 ---
 
-# GitHub Copilot Customisation
+# Momentum — Agent Guide
+
+Diese Datei ist die zentrale Einstiegsdokumentation für KI-Coding-Agenten, die an diesem Projekt arbeiten. Sie enthält eine Projektübersicht, den Technologie-Stack, Build- und Testbefehle, Code-Konventionen, Sicherheitsregeln und — am Ende — die projektspezifische GitHub-Copilot-Konfiguration.
+
+> **Primäre Projektdokumentationssprache:** Deutsch (diese Datei ist daher auf Deutsch verfasst). Quellcode-Kommentare sind überwiegend Englisch.
+
+---
+
+## 1. Projektübersicht
+
+**Produktname:** Momentum (auch *Momentum Marketing OS* / *Marketing Powerhouse*)
+
+**Tagline:** „Deine Marketing-Kampagnen mit Momentum"
+
+**Domäne:** Multi-Tenancy-SaaS-Plattform zur Unterstützung und Automatisierung von Marketingprozessen:
+
+- Kampagnen-Management
+- Content-Planung & Kalender
+- Budget & Controlling
+- Zielgruppen / Personas
+- Customer Journey
+- Kanäle & Touchpoints
+- Aufgaben / Kanban
+- Team-Zusammenarbeit
+- Benachrichtigungen
+- Social-Media-Publishing & KI-Generierung über den Python-Backend-Subprojekt **Social Hub**
+
+**Wichtige Merkmale:**
+
+- Mehrere Projekte pro Benutzer (Multi-Tenancy über `companies`)
+- 4-Rollen-System: Super-Admin, Projekt-Admin, Manager, Member
+- DSGVO-konforme europäische Lösung (Supabase `eu-central-1`)
+- Dark-first Design-System mit Tailwind CSS v4
+
+---
+
+## 2. Technologie-Stack & Laufzeitarchitektur
+
+| Schicht | Technologie | Bemerkung |
+|---|---|---|
+| Framework | Next.js 16 | App Router, Turbopack dev, `app/`-Verzeichnis |
+| Sprache | TypeScript 5.9 | Strict Mode aktiv |
+| UI | React 19 | Server Components by default |
+| Styling | Tailwind CSS v4 + modulares CSS | `src/index.css` + 8 CSS-Dateien unter `src/styles/` |
+| State | React Context | `AuthContext`, `CompanyContext`, `DataContext`, `NotificationContext`, `TaskContext`, `ContentContext`, `PublishingContext`, `LanguageContext`, `ThemeContext`, `SubscriptionContext` |
+| Diagramme | Recharts | Dashboard- & Budget-Charts |
+| Icons | Lucide React | |
+| Backend / DB | Supabase | PostgreSQL, Auth, Storage, RLS, Schema `test` (Dev) / `public` (Prod) |
+| Auth | Eigenes JWT + bcrypt | `src/lib/serverAuth.ts`, `httpOnly`-Cookie `momentum_session` |
+| KI | Google Gemini | `app/api/ai/*`, `src/lib/gemini.ts` |
+| Social Publishing | Python FastAPI | Subprojekt `Social Hub/` (Port 8000) |
+| Deployment | Vercel | Geplant, gesteuert über GitHub Actions |
+
+### Frontend ↔ Backend Kommunikation
+
+1. **Supabase JS Client** (`src/lib/supabase.ts`) — Browser/Server ruft PostgREST mit Anon-Key und konfiguriertem Schema.
+2. **Next.js Route Handler** unter `app/api/*`:
+   - `app/api/auth/login|logout|me|register/route.ts` — Session-Auth
+   - `app/api/ai/generate-task|generate-ideas/route.ts` — Gemini-Proxy
+   - `app/api/social-hub/route.ts` — sichere Brücke zum FastAPI Social Hub
+   - `app/api/users/create/route.ts` — Benutzererstellung
+3. **Next.js Rewrite** (`next.config.ts`) — `/social-hub/:path*` wird an `SOCIAL_HUB_INTERNAL_URL` (default `http://127.0.0.1:8000`) weitergeleitet.
+
+---
+
+## 3. Projektstruktur
+
+```
+app/                    Next.js App Router (Seiten + API-Routen)
+src/
+  components/           Wiederverwendbare UI-Komponenten
+  views/                Seiten-Level-Komponenten, die von app/ importiert werden
+  context/              React-Context-Provider
+  lib/                  Kernebenen (API, Supabase, Auth, KI, Social-Hub-Entitlements)
+  types/                Zentrale TypeScript-Typen
+  styles/               Modulares CSS-Design-System
+  hooks/                Custom Hooks
+  data/                 Legacy-Statikdaten
+  __tests__/            Vitest-Unit-Tests + Setup
+supabase/migrations/    SQL-Migrationen
+scripts/                Node.js-Migrations- & QA-Skripte
+public/                 Statische Assets
+Social Hub/             Python-FastAPI-Backend (eigenes package.json)
+e2e/                    Playwright-E2E-Tests
+.github/                Copilot-Instructions, Agents, Skills, Workflows
+```
+
+### Wichtige Dateien
+
+| Datei | Zweck |
+|---|---|
+| `app/layout.tsx` | Root-Layout |
+| `app/providers.tsx` | Client-seitiger Context-Provider-Wrapper |
+| `app/client-shell.tsx` | Auth-Gate + Company-Gate + App-Shell |
+| `app/page.tsx` | Marketing-Landingpage |
+| `app/login/page.tsx` | Login |
+| `app/admin/page.tsx` | Super-Admin-Panel |
+| `app/dashboard/page.tsx` | Dashboard |
+| `app/setup/page.tsx` | Setup-Seite |
+| `app/project/[projectId]/page.tsx` | Projektdashboard |
+| `src/lib/api.ts` | Zentrale CRUD-API (~2.300 Zeilen) |
+| `src/lib/supabase.ts` | Supabase-Client + Service-Client |
+| `src/lib/serverAuth.ts` | JWT-Erstellung / -Verifizierung |
+| `src/context/AuthContext.tsx` | RBAC & Berechtigungen |
+| `src/context/CompanyContext.tsx` | Multi-Tenancy / Projekt-Verwaltung |
+| `next.config.ts` | Next.js-Konfiguration + Social-Hub-Rewrite |
+| `tsconfig.json` | TypeScript strict, `@/* → ./src/*` |
+| `postcss.config.mjs` | Tailwind v4 PostCSS-Plugin |
+| `eslint.config.js` | ESLint Flat Config |
+| `vitest.config.ts` | Vitest-Konfiguration |
+| `playwright.config.ts` | Playwright-E2E-Konfiguration |
+
+---
+
+## 4. Build-, Dev- und Testbefehle
+
+### Entwicklung
+
+```bash
+npm run dev              # Startet Next.js + Social Hub parallel
+npm run dev:web          # Nur Next.js (http://localhost:3000)
+npm run dev:social-hub   # Nur Social Hub (http://127.0.0.1:8000)
+```
+
+### Build
+
+```bash
+npm run build            # Produktions-Build
+npm run start            # Produktions-Server starten
+npm run lint             # ESLint
+npm run typecheck        # TypeScript-Prüfung (tsc --noEmit)
+```
+
+### Tests
+
+```bash
+npm run test             # Vitest im Watch-Modus
+npm run test:run         # Vitest einmalig ausführen
+npm run test:coverage    # Coverage-Report
+npm run test:e2e         # Alle Playwright-E2E-Tests
+```
+
+### QA-Skripte
+
+```bash
+npm run qa:seed-shared      # Seed-Daten für Social Hub
+npm run qa:db               # DB-Integritätsprüfung
+npm run qa:api              # API-/Datenfluss-Check gegen Supabase
+npm run qa:ai               # KI-Qualitätsprüfung gegen Gemini
+npm run qa:pricing          # Pricing-/Subscription-QA
+npm run qa:smoke            # Playwright Smoke-Test
+npm run qa:backend          # Social Hub Live-E2E
+npm run qa:backend:smoke    # Social Hub Smoke
+npm run qa:backend:ai       # Social Hub Live-AI
+npm run qa:backend:ai:regression   # Social Hub AI-Regression
+npm run qa:full             # Vollständige Pipeline
+```
+
+`qa:full` führt aus: `qa:seed-shared` → `typecheck` → `test:run` → `qa:db` → `qa:api` → `qa:ai` → `qa:smoke` → `qa:backend`.
+
+### Social Hub (Backend)
+
+```bash
+cd "Social Hub"
+npm run dev                # FastAPI dev server
+npm run start              # uvicorn Produktionsstart
+npm run seed               # Seed/Reset
+npm run qa:ai:regression   # AI-Regression
+npm run qa:live:e2e        # Live E2E
+npm run qa:smoke           # Supabase-Smoke
+npm run qa:live:ai         # Live AI
+```
+
+---
+
+## 5. Entwicklungskonventionen & Code-Style
+
+### Komponenten
+
+- **Server Components by default.** Nur `"use client"` verwenden, wenn Interaktivität, Hooks oder Browser-APIs benötigt werden.
+- Client Components möglichst als Blätter im Komponentenbaum halten.
+- Next.js 16: `params`, `searchParams`, `cookies()`, `headers()` sind asynchron und müssen mit `await` behandelt werden.
+
+### Importe & Exporte
+
+- **Named exports** bevorzugen.
+- Ausnahme: Next.js-Routendateien (`page.tsx`, `layout.tsx`, `loading.tsx`, `error.tsx`) erfordern Default-Exports.
+- Projektinterne Importe über Alias `@/*` (mappt auf `./src/*`).
+- Type-only Imports: `import type { ... }`.
+
+### Namenskonventionen
+
+- Komponenten & Typen: `PascalCase`
+- Funktionen, Variablen, Hooks: `camelCase`
+- Konstanten: `UPPER_SNAKE_CASE`
+- CSS-Dateien: `kebab-case`
+- Dateien mit mehreren Komponenten oft deskriptiv (z. B. `CampaignDetailComponents.tsx`).
+
+### TypeScript
+
+- Strict Mode aktiv.
+- `interface` für Objektformen bevorzugen, `type` für Unions/Intersections.
+- Keine `enum`; stattdessen `as const` oder String-Literal-Unions.
+
+### Styling
+
+- Tailwind utility-first.
+- Dark-first; neues UI muss Light- **und** Dark-Theme unterstützen.
+- Modulares CSS in `src/styles/` für globale Design-Token.
+- Kein Em-Dash (`—`) in Code oder Konfigurationsdateien; Bindestrich (`-`) verwenden.
+
+### Sprache & Internationalisierung
+
+- Neue größere Oberflächen müssen mehrsprachig (EN + DE) über `next-intl` umgesetzt werden.
+- Benutzer-facing Text nie hardcoden; `useTranslations`-Hook verwenden.
+
+### Allgemeine Regeln
+
+- Nur Dateien ändern, die für die Aufgabe notwendig sind.
+- Keine lokalen Testdaten als JSON/Fixtures im Projekt ablegen; Seed-Daten über Supabase Dashboard, MCP oder Migrationsskripte.
+- Vor dem Beenden einer nicht-trivialen Änderung: `typecheck` → `lint` → `build` → lokal mit `dev` testen.
+
+---
+
+## 6. Teststrategie
+
+### Unit-Tests
+
+- **Framework:** Vitest 4 + `@vitejs/plugin-react` + `@testing-library/react` + `happy-dom`.
+- **Konfiguration:** `vitest.config.ts`.
+- **Setup:** `src/__tests__/setup.ts` leert `localStorage`, polyfillt `crypto.randomUUID`.
+- **Befehle:** `npm run test`, `npm run test:run`, `npm run test:coverage`.
+
+Vorhandene Unit-Tests:
+
+- `src/__tests__/unit/auth.test.ts` — AuthContext & Berechtigungsmatrix
+- `src/__tests__/unit/api.test.ts` — CRUD-Mappings in `src/lib/api.ts`
+- `src/__tests__/unit/context.test.tsx` — Context-Verhalten
+
+### E2E-Tests
+
+- **Framework:** Playwright 1.58.
+- **Konfiguration:** `playwright.config.ts`.
+- **Spec:** `e2e/authenticated-smoke.spec.ts` — Session-Seed über `localStorage`, Navigation durch Dashboard, Content, Tasks und Social-Hub-Connectivity.
+
+### QA-Skripte (Integration / Daten)
+
+| Skript | Prüfung |
+|---|---|
+| `scripts/qa_check.cjs` | Plans/Subscriptions-Integrität, Feature-Flags, Company-Coverage |
+| `scripts/qa_api_test.cjs` | Supabase-CRUD & Subscription-Lifecycle |
+| `scripts/qa_ai_e2e.cjs` | Echte Prompts aus Supabase-Daten, Gemini-Aufruf, Output-Qualität |
+| `scripts/qa_pricing.mjs` | Plan-Definitionen, Subscriptions, User/Member-Daten |
+| `scripts/seed_shared_social_hub.cjs` | Social-Hub-Demo-Daten upsert |
+| `Social Hub/app/qa_*.py` | Backend-Integration, Live-Supabase, E2E, AI-Regression |
+
+---
+
+## 7. Datenbank & Migrationen
+
+### Arbeitsablauf
+
+- Zeitstempelbasierte SQL-Migrationen liegen in `supabase/migrations/`.
+- Einmalige Daten-/Setup-Skripte liegen in `scripts/` (z. B. `migrate_plans.mjs`, `migrate_notifications.mjs`).
+- In Produktion sind direkte Dashboard-Schema-Änderungen verboten; Migrationen über Supabase CLI versionieren.
+
+### Wichtige Tabellen
+
+- `users` — Benutzerkonten, `is_super_admin`, `is_active`, `organisation_id`
+- `organisations` — Abrechnungsebene über Companies
+- `companies` — Projekte / Tenants
+- `company_members` — Benutzer↔Projekt-Zuordnung mit Rolle
+- `plans` / `subscriptions` — Tarife & Abos
+- `campaigns`, `audiences`, `touchpoints`, `tasks`, `contents`
+- `company_positioning`, `company_keywords`
+- `budget_overview`, `budget_categories`, `monthly_trends`
+- `customer_journeys`, `journey_stages`
+- `notifications`, `notification_preferences`
+- `connected_accounts`, `scheduled_posts` — Social Hub
+- `knowledge_documents`, `ai_generation_logs` — RAG / KI
+
+### Multi-Tenancy
+
+- Jede Datentabelle verwendet `company_id` als Fremdschlüssel auf `companies`.
+- `CompanyContext` lädt nur Projekte, in denen der aktuelle Benutzer Mitglied ist.
+- Aktive Projekt-ID wird in URL (`/project/[projectId]/...`) und `localStorage` (`momentum_active_company`) synchron gehalten.
+
+### RLS & Sicherheit
+
+- RLS ist auf Tabellen aktiviert.
+- Entwicklungsrichtlinien sind derzeit permissiv für `anon`; Produktionsrichtlinien sollen rollen- und mitgliedschaftsbasiert sein (Beispiel: `subscriptions_select` prüft `current_setting('app.current_user_id')`).
+- Service-Role-Client (`createServiceClient()` in `src/lib/supabase.ts`) nur serverseitig in Route Handlern verwenden.
+
+---
+
+## 8. Umgebungsvariablen
+
+Erforderliche Variablen (aus `.env`, `.env.hosted`, `Social Hub/.env.example`):
+
+```env
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_SUPABASE_SCHEMA=test          # Dev: test, Prod: public
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_ACCESS_TOKEN=
+SUPABASE_DB_URL=                          # lokal
+
+# Auth
+MOMENTUM_AUTH_SECRET=                     # JWT-Signing-Secret
+
+# KI
+NEXT_PUBLIC_GEMINI_API_KEY=
+GOOGLE_API_KEY=                           # Social Hub / QA-Skripte
+
+# Social Hub
+SOCIAL_HUB_INTERNAL_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_SOCIAL_HUB_URL=/social-hub
+
+# OAuth (Social Hub)
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+LINKEDIN_REDIRECT_URI=
+INSTAGRAM_APP_ID=
+INSTAGRAM_APP_SECRET=
+INSTAGRAM_REDIRECT_URI=
+
+# Social Hub Runtime
+APP_ENV=test
+APP_SECRET_KEY=
+DATABASE_SCHEMA=test
+DATABASE_TABLE_PREFIX=socialhub_
+POSTING_DAYS=1,3
+POSTING_HOUR=9
+POSTING_MINUTE=0
+```
+
+**Regel:** Server-only Secrets (`SUPABASE_SERVICE_ROLE_KEY`, `MOMENTUM_AUTH_SECRET`, `GOOGLE_API_KEY`) dürfen **nie** mit `NEXT_PUBLIC_` prefixt werden.
+
+---
+
+## 9. Deployment & CI/CD
+
+### GitHub Workflows (`.github/workflows/`)
+
+| Workflow | Auslöser | Zweck |
+|---|---|---|
+| `pr-pipeline.yml` | PRs auf `main`/`master`, manuell | Ruft org-level `pr-autofix.yml` (ESLint --fix) und `pr-checks.yml` (typecheck + lint) auf |
+| `deploy.yml` | Manuell (`workflow_dispatch`) | Deployment auf Vercel (production oder preview); unterstützt `db_schema`-Override |
+| `lp-generator.yml` | Manuell | Generiert ein bilingual Landing-Page-Repo aus Template |
+
+### Vercel
+
+- Keine committed `vercel.json`.
+- Deployment über Vercel-CLI in GitHub Actions mit org-level Secrets (`VERCEL_TOKEN`, `VERCEL_ORG_ID`) und repo-level `VERCEL_PROJECT_ID`.
+
+---
+
+## 10. Sicherheitsaspekte
+
+### Authentifizierung & Autorisierung
+
+- **Eigenes Session-Auth** (nicht Supabase Auth):
+  - `app/api/auth/login/route.ts` prüft bcrypt-Hash gegen `users.password`.
+  - Legacy-Klartextpasswörter werden beim ersten Login neu gehasht.
+  - JWT (7 Tage Gültigkeit) wird als `httpOnly`, `Secure` (Prod), `SameSite=lax` Cookie `momentum_session` gesetzt.
+- **RBAC — 4 Rollen:**
+  - `super_admin` — global, umgeht alle Berechtigungsprüfungen
+  - `company_admin` — volle Kontrolle innerhalb eines Projekts
+  - `manager` — Kampagnen, Content, Budget, Tasks, Touchpoints
+  - `member` — eigene Tasks bearbeiten, Kampagnendaten einsehen
+- Berechtigungshilfen: `can('canCreateCampaigns')`, `isSuperAdmin`, `activeCompanyRole`.
+
+### Multi-Tenancy-Isolation
+
+- Datenisolation über `company_id` in allen Datentabellen.
+- Nicht-Super-Admins sehen nur zugewiesene Projekte.
+- Inaktive Benutzer werden beim Login und per 30s-Polling blockiert.
+
+### Social-Hub-Brücke
+
+- `app/api/social-hub/route.ts` erzwingt:
+  - Pfad-Whitelist
+  - Anrufer muss `company_admin` oder `manager` in der Company sein
+  - Aktives Abo muss Social-Hub-Entitlement enthalten (Pro/Ultimate)
+
+### Secrets
+
+- `.gitignore` schließt `.env*`, `.venv/`, `test-results/`, `.next/`, `out/` aus.
+- Service-Key niemals an den Browser exposen.
+
+---
+
+## 11. GitHub Copilot Customisation
+
+> Der folgende Abschnitt beschreibt die projektspezifische GitHub-Copilot-Konfiguration (Agents, Instructions, Skills, Workflow). Er ist beibehalten aus der vorherigen Version dieser Datei.
 
 <table>
 <tr>
@@ -14,68 +410,13 @@
 </tr>
 </table>
 
----
-
-## Übersicht / Overview
+### Übersicht / Overview
 
 | Typ / Type | Pfad / Path | Beschreibung / Description |
 |---|---|---|
 | **Global Instructions** | `.github/copilot-instructions.md` | Projektweite Basisregeln für alle Copilot-Interaktionen. / Project-wide baseline rules for all Copilot interactions. |
 | **Instructions** | `.github/instructions/*.instructions.md` | Dateimuster-spezifische Coding-Richtlinien. / File-pattern-scoped coding guidelines. |
 | **Agents** | `.github/agents/*.agent.md` | Spezialisierte KI-Personas für verschiedene Phasen. / Specialised AI personas for different development phases. |
-
----
-
-## `copilot-instructions.md` - Globale Basisregeln / Global Baseline Rules
-
-**Pfad / Path:** `.github/copilot-instructions.md`
-
-<table>
-<tr>
-<th width="50%">DE Was ist das?</th>
-<th width="50%">EN What is it?</th>
-</tr>
-<tr>
-<td>Diese Datei wird bei <strong>jeder</strong> Copilot-Interaktion automatisch geladen. Sie definiert den Tech-Stack, kritische Regeln (async APIs, Server Components, Supabase), und Code-Stil-Konventionen für das gesamte Projekt.</td>
-<td>This file is automatically loaded on <strong>every</strong> Copilot interaction. It defines the tech stack, critical rules (async APIs, Server Components, Supabase), and code style conventions for the whole project.</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<th width="50%">DE Wann bearbeiten?</th>
-<th width="50%">EN When to edit?</th>
-</tr>
-<tr>
-<td>
-- Tech-Stack ändert sich (z. B. neue Bibliothek wird Standardmuster)<br>
-- Neue projektweite Regeln sollen für alle Copilot-Interaktionen gelten<br>
-- Team-Konventionen ändern sich<br>
-<strong>⚠️ Kurz halten</strong> - diese Datei wird immer in den Kontext geladen.
-</td>
-<td>
-- Tech stack changes (e.g. a new library becomes a standard pattern)<br>
-- New project-wide rules need to apply to all Copilot interactions<br>
-- Team conventions change<br>
-<strong>⚠️ Keep it short</strong> - this file is always loaded into context.
-</td>
-</tr>
-</table>
-
----
-
-## Instructions - Datei-spezifische Richtlinien / File-Scoped Guidelines
-
-<table>
-<tr>
-<th width="50%">DE Was sind Instructions?</th>
-<th width="50%">EN What are Instructions?</th>
-</tr>
-<tr>
-<td>Instructions sind Richtlinien, die automatisch geladen werden, wenn Copilot an Dateien arbeitet, die dem <code>applyTo</code>-Glob-Muster entsprechen. Sie ergänzen die globalen Regeln mit datei-spezifischen Details.</td>
-<td>Instructions are guidelines that are automatically loaded when Copilot works on files matching the <code>applyTo</code> glob pattern. They extend the global rules with file-type-specific details.</td>
-</tr>
-</table>
 
 ### Vorhandene Instructions / Available Instructions
 
@@ -86,361 +427,47 @@
 | `typescript.instructions.md` | `**/*.ts, **/*.tsx` | TypeScript Strict Mode, Naming Conventions, Type Safety |
 | `supabase.instructions.md` | `**/supabase/**, **/*supabase*` | Supabase Client Setup, RLS, Migrations, Schema Awareness |
 
-### Eigene Instructions erstellen / Creating Custom Instructions
+### Agents — KI-Personas / AI Personas
 
-<table>
-<tr>
-<th width="50%">DE Anleitung</th>
-<th width="50%">EN Guide</th>
-</tr>
-<tr>
-<td>Erstelle eine <code>.instructions.md</code>-Datei in <code>.github/instructions/</code> mit YAML-Frontmatter. Das <code>applyTo</code>-Feld akzeptiert Glob-Muster und bestimmt, für welche Dateien die Regeln gelten.</td>
-<td>Create a <code>.instructions.md</code> file in <code>.github/instructions/</code> with YAML frontmatter. The <code>applyTo</code> field accepts glob patterns and determines which files the rules apply to.</td>
-</tr>
-</table>
+- **`@planner`** — Technische Planung und Anforderungsanalyse vor dem Coding. Erkundet Codebase, identifiziert betroffene Dateien und erstellt einen nummerierten Implementierungsplan. Schreibt selbst keinen Code.
+- **`@developer`** — Strukturierte Feature-Implementierung mit Qualitätsprüfungen. Vierphasiger Prozess: Vorbereitung → Implementierung → Verifikation (`typecheck` → `lint` → `build` → lokal testen) → Dokumentation.
+- **`@reviewer`** — Code-Review und Qualitätssicherung vor dem PR. Strukturierte Checkliste (Qualität, Next.js 16, Supabase-Sicherheit, Styling) und Build-Checks.
+- **`@anforderungsdokument`** — Erstellt ein vollständiges WAMOCON-Anforderungsdokument (9 Kapitel + .docx) für Web-/SaaS-Applikationen. Nur Web/SaaS, nur Quellen nicht älter als 1 Jahr.
 
-```yaml
----
-applyTo: "**/*.tsx"
----
-# Your instructions here
-```
-
----
-
-## Agents - KI-Personas / AI Personas
-
-<table>
-<tr>
-<th width="50%">DE Was sind Agents?</th>
-<th width="50%">EN What are Agents?</th>
-</tr>
-<tr>
-<td>Agents sind spezialisierte KI-Personas. Du rufst sie in VS Code über das Chat-Panel mit <code>@agent-name</code> auf. Jeder Agent hat eine klar definierte Rolle, einen Workflow und Regeln.</td>
-<td>Agents are specialised AI personas. You invoke them in VS Code via the Chat panel using <code>@agent-name</code>. Each agent has a clearly defined role, workflow, and rules.</td>
-</tr>
-</table>
-
----
-
-### `@planner` - Planer
-
-<table>
-<tr>
-<th width="50%">DE</th>
-<th width="50%">EN</th>
-</tr>
-<tr>
-<td><strong>Zweck:</strong> Technische Planung und Anforderungsanalyse vor dem Coding.</td>
-<td><strong>Purpose:</strong> Technical planning and requirements analysis before coding.</td>
-</tr>
-<tr>
-<td><strong>Wann verwenden:</strong><br>- Vor dem Start eines neuen Features<br>- Wenn die Anforderungen unklar sind<br>- Vor Refactoring oder Migrations-Aufgaben</td>
-<td><strong>When to use:</strong><br>- Before starting a new feature<br>- When requirements are unclear<br>- Before refactoring or migration tasks</td>
-</tr>
-<tr>
-<td><strong>Was er tut:</strong><br>✔ Codebase erkunden und Kontext sammeln<br>✔ Betroffene Dateien und Module identifizieren<br>✔ Nummerierten Implementierungsplan erstellen<br>✘ <strong>Schreibt keinen Code</strong></td>
-<td><strong>What it does:</strong><br>✔ Explore codebase and gather context<br>✔ Identify affected files and modules<br>✔ Create a numbered implementation plan<br>✘ <strong>Does not write code</strong></td>
-</tr>
-<tr>
-<td><strong>Verwendung:</strong> <code>@planner Füge eine Authentifizierungsseite hinzu</code></td>
-<td><strong>Usage:</strong> <code>@planner Add an authentication page</code></td>
-</tr>
-</table>
-
----
-
-### `@developer` - Entwickler
-
-<table>
-<tr>
-<th width="50%">DE</th>
-<th width="50%">EN</th>
-</tr>
-<tr>
-<td><strong>Zweck:</strong> Strukturierte Feature-Implementierung mit Qualitätsprüfungen.</td>
-<td><strong>Purpose:</strong> Structured feature implementation with quality checks.</td>
-</tr>
-<tr>
-<td><strong>Wann verwenden:</strong><br>- Nach der Planung mit <code>@planner</code><br>- Zur Implementierung von Features, Seiten, API-Routen<br>- Für Datenbankänderungen und Migrationen</td>
-<td><strong>When to use:</strong><br>- After planning with <code>@planner</code><br>- To implement features, pages, API routes<br>- For database changes and migrations</td>
-</tr>
-<tr>
-<td><strong>Vierphasiger Prozess:</strong><br>1. <strong>Vorbereitung</strong> - Plan lesen, Code verstehen<br>2. <strong>Implementierung</strong> - Schrittweise, Fehler sofort beheben<br>3. <strong>Verifikation (PFLICHT)</strong> - <code>typecheck</code> → <code>lint</code> → <code>build</code> → lokal testen<br>4. <strong>Dokumentation</strong> - Handbook aktualisieren</td>
-<td><strong>Four-phase process:</strong><br>1. <strong>Preparation</strong> - Read plan, understand code<br>2. <strong>Implementation</strong> - Step by step, fix errors immediately<br>3. <strong>Verification (MANDATORY)</strong> - <code>typecheck</code> → <code>lint</code> → <code>build</code> → test locally<br>4. <strong>Documentation</strong> - Update handbook</td>
-</tr>
-<tr>
-<td><strong>Verwendung:</strong> <code>@developer Implementiere diesen Plan: [Plan einfügen]</code></td>
-<td><strong>Usage:</strong> <code>@developer Implement this plan: [paste plan]</code></td>
-</tr>
-</table>
-
----
-
-### `@reviewer` - Code-Reviewer
-
-<table>
-<tr>
-<th width="50%">DE</th>
-<th width="50%">EN</th>
-</tr>
-<tr>
-<td><strong>Zweck:</strong> Code-Review und Qualitätssicherung vor dem PR.</td>
-<td><strong>Purpose:</strong> Code review and quality assurance before a PR.</td>
-</tr>
-<tr>
-<td><strong>Wann verwenden:</strong><br>- Bevor ein PR erstellt wird<br>- Nach einer Implementierung zur Qualitätsprüfung<br>- Zur Sicherheits- und Performance-Analyse</td>
-<td><strong>When to use:</strong><br>- Before creating a PR<br>- After implementation for quality check<br>- For security and performance audits</td>
-</tr>
-<tr>
-<td><strong>Was er tut:</strong><br>✔ Strukturierte Checkliste (Qualität, Next.js 16, Supabase-Sicherheit, Styling)<br>✔ Alle Checks ausführen (typecheck, lint, build)<br>✔ Review-Bericht mit Status (✅ / ⚠️ / ❌)</td>
-<td><strong>What it does:</strong><br>✔ Structured checklist (quality, Next.js 16, Supabase security, styling)<br>✔ Run all checks (typecheck, lint, build)<br>✔ Review report with status (✅ / ⚠️ / ❌)</td>
-</tr>
-<tr>
-<td><strong>Verwendung:</strong> <code>@reviewer Überprüfe die Änderungen in src/app/dashboard/</code></td>
-<td><strong>Usage:</strong> <code>@reviewer Review the changes in src/app/dashboard/</code></td>
-</tr>
-</table>
-
----
-
-### `@anforderungsdokument` - Anforderungsdokument
-
-<table>
-<tr>
-<th width="50%">DE</th>
-<th width="50%">EN</th>
-</tr>
-<tr>
-<td><strong>Zweck:</strong> Vollständiges WAMOCON-Anforderungsdokument (9 Kapitel + .docx) für Web-/SaaS-Applikationen erstellen.</td>
-<td><strong>Purpose:</strong> Create a complete WAMOCON requirements document (9 chapters + .docx) for web/SaaS applications.</td>
-</tr>
-<tr>
-<td><strong>Wann verwenden:</strong><br>- Vor dem Start eines neuen Projekts<br>- Wenn eine App-Idee dokumentiert werden soll<br>- Bevor die Implementierung beginnt (Freigabe erforderlich)</td>
-<td><strong>When to use:</strong><br>- Before starting a new project<br>- When an app idea needs to be documented<br>- Before implementation starts (approval required)</td>
-</tr>
-<tr>
-<td><strong>Was er tut:</strong><br>✔ Marktanalyse, Wettbewerb, Zielgruppe recherchieren<br>✔ 9-Kapitel-Dokument mit echten Daten befüllen<br>✔ Dokument als .docx generieren<br>✘ <strong>Nur Web/SaaS - keine mobilen Apps</strong><br>✘ <strong>Nur Quellen nicht älter als 1 Jahr</strong></td>
-<td><strong>What it does:</strong><br>✔ Research market analysis, competition, target audience<br>✔ Fill 9-chapter document with real data<br>✔ Generate document as .docx<br>✘ <strong>Web/SaaS only - no mobile apps</strong><br>✘ <strong>Sources not older than 1 year only</strong></td>
-</tr>
-<tr>
-<td><strong>Verwendung:</strong> <code>@anforderungsdokument Erstelle das Anforderungsdokument für [Projektname]</code></td>
-<td><strong>Usage:</strong> <code>@anforderungsdokument Create the requirements document for [project name]</code></td>
-</tr>
-</table>
-
-#### Schritt-für-Schritt-Anleitung / Step-by-Step Guide
-
-**1.** Fülle `IDEA.md` im Projekt-Root aus.
-
-**2.** Kopiere den Prompt unten und sende ihn im Chat. Die KI liest `IDEA.md` und `SKILL.md` automatisch - nichts einfügen, nichts ersetzen:
-
-```
-Nutze für diese Aufgabe die PERSONA eines interdisziplinären Expertenteams
-(Senior Product Manager, Market Research Analyst und Tech Lead) im CEOMODE.
-Führe die gesamte Analyse im /godmode und auf L99 aus.
-
-1. Vorbereitung
-Lies zunächst diese beiden Dateien vollständig, bevor du beginnst:
-- .github/skills/anforderungsdokument/SKILL.md
-- IDEA.md
-
-2. Projektrahmen & Kontext
-Fokus: Entwicklung eines neuen Web-/SaaS-Tools.
-Plattform: Ausschließlich browserbasierte Web- und SaaS-Applikationen.
-Tech-Stack: Next.js, Tailwind CSS, TypeScript, Supabase, Vercel.
-Strukturiere die technische Architektur als ARCHITECT.
-
-3. Kernaufgabe
-Durchdenke die Anforderungen mit /deepthink und erstelle ein vollständiges
-WAMOCON-Anforderungsdokument. Halte dich strikt an die verbindliche
-9-Kapitel-Struktur aus dem SKILL.md. Fülle jedes Kapitel mit echten, belegten
-Daten. Verwende keine Platzhalter.
-
-4. Strikte Restriktionen
-Agiere bei der Einhaltung dieser Regeln als SENTINEL:
-
-Plattform-Regel: Mobile Apps sind ausgeschlossen. Die Begriffe iOS, Android,
-React Native oder Flutter dürfen im Dokument nicht erwähnt werden.
-
-Quellen-Regel (FACTCHECK & /investigate): Nutze ausschließlich Quellen, die
-jünger als ein Jahr sind. Ältere Quellen sind verboten. Jede genannte Zahl muss
-mit einer exakten Quellenangabe und dem Veröffentlichungsdatum belegt werden.
-
-Tonalität: Analytisch, datengestützt, kritisch und lösungsorientiert.
-Professionell, durchgehend auf Deutsch unter Verwendung echter Umlaute (Ä, Ö, Ü, ß).
-
-5. Ausgabe
-Skript: scripts/generate-anforderungsdokument.mjs
-Datei: public/Anforderungsdokument_[ProjektName].docx
-```
-
-**3.** Dokument prüfen und zur Freigabe bei der Geschäftsführung einreichen.
-
-**4.** Nach Freigabe: Implementierung mit `@planner` starten.
-
----
-
-## Tools
+### Tools
 
 | Tool | Pfad / Path | Zweck / Purpose |
 |---|---|---|
-| **next-browser** | `.github/skills/next-browser/SKILL.md` | CLI that exposes React DevTools and the Next.js dev overlay as shell commands - component trees, props, errors, performance, screenshots - structured output for AI agents. |
-| **anforderungsdokument** | `.github/skills/anforderungsdokument/SKILL.md` | Drei Entwicklungsprompts: Tiefenanalyse, Marketing/UX-Rework und Anforderungsdokument (9 Kapitel + Quellenverzeichnis als .docx). Nur Web/SaaS - keine mobilen Apps. Nur Quellen nicht älter als 1 Jahr. IDEA.md ausfüllen, Prompt 3 aufrufen, .docx generieren, zur Freigabe einreichen. |
+| **next-browser** | `.github/skills/next-browser/SKILL.md` | CLI that exposes React DevTools and the Next.js dev overlay as shell commands — component trees, props, errors, performance, screenshots. |
+| **anforderungsdokument** | `.github/skills/anforderungsdokument/SKILL.md` | Drei strukturierte Entwicklungsprompts: Tiefenanalyse, Marketing/UX-Rework, Anforderungsdokument (9 Kapitel + Quellenverzeichnis als .docx). |
 
-### `next-browser` - AI-Driven Browser for Next.js
+### Empfohlener Workflow / Recommended Workflow
 
-<table>
-<tr>
-<th width="50%">DE Was ist das?</th>
-<th width="50%">EN What is it?</th>
-</tr>
-<tr>
-<td><code>@vercel/next-browser</code> ist ein CLI-Tool, das React DevTools und das Next.js Dev-Overlay als Shell-Befehle bereitstellt. Agents können den Browser steuern, Komponenten inspizieren, Fehler lesen und Performance prüfen - ohne manuell durch DevTools zu klicken.</td>
-<td><code>@vercel/next-browser</code> is a CLI tool that exposes React DevTools and the Next.js dev overlay as shell commands. Agents can drive the browser, inspect components, read errors, and check performance - without manually clicking through DevTools.</td>
-</tr>
-<tr>
-<td><strong>Wann verwenden:</strong><br>- Nach der Implementierung zur visuellen Verifikation<br>- Debugging von Runtime-Fehlern oder Re-Render-Problemen<br>- Performance-Analyse (Core Web Vitals, Hydration)<br>- PPR-Shell-Debugging</td>
-<td><strong>When to use:</strong><br>- After implementation for visual verification<br>- Debugging runtime errors or re-render issues<br>- Performance analysis (Core Web Vitals, hydration timing)<br>- PPR shell debugging</td>
-</tr>
-<tr>
-<td><strong>Installation:</strong><br><code>npm install -g @vercel/next-browser</code><br><code>playwright install chromium</code><br>Benötigt Node >= 20</td>
-<td><strong>Install:</strong><br><code>npm install -g @vercel/next-browser</code><br><code>playwright install chromium</code><br>Requires Node >= 20</td>
-</tr>
-<tr>
-<td><strong>Wichtigste Befehle:</strong><br><code>next-browser open &lt;url&gt;</code> - Browser starten<br><code>next-browser snapshot</code> - Accessibility-Tree + klickbare Refs<br><code>next-browser errors</code> - Build- und Runtime-Fehler<br><code>next-browser perf</code> - Core Web Vitals + Hydration<br><code>next-browser screenshot</code> - Viewport als PNG<br><code>next-browser tree</code> - React-Komponentenbaum</td>
-<td><strong>Key commands:</strong><br><code>next-browser open &lt;url&gt;</code> - launch browser<br><code>next-browser snapshot</code> - accessibility tree + clickable refs<br><code>next-browser errors</code> - build and runtime errors<br><code>next-browser perf</code> - Core Web Vitals + hydration timing<br><code>next-browser screenshot</code> - viewport as PNG<br><code>next-browser tree</code> - React component tree</td>
-</tr>
-<tr>
-<td><strong>Vollständige Dokumentation:</strong> <code>.github/skills/next-browser/SKILL.md</code></td>
-<td><strong>Full documentation:</strong> <code>.github/skills/next-browser/SKILL.md</code></td>
-</tr>
-</table>
+1. **Phase 0 — Anforderungen (neues Projekt):**
+   - `IDEA.md` im Projekt-Root ausfüllen.
+   - `@anforderungsdokument` aufrufen.
+   - Dokument prüfen und zur Freigabe einreichen.
+2. **Phase 1 — Planung:** `@planner`
+3. **Phase 2 — Implementierung:** `@developer`
+4. **Phase 3 — Qualitätsprüfung:** `@reviewer`
 
----
+### Eigene Agents / Instructions erstellen
 
-### `anforderungsdokument` - WAMOCON Entwicklungsprompts
+- Instructions: `.github/instructions/<name>.instructions.md` mit YAML-Frontmatter (`applyTo`).
+- Agents: `.github/agents/<name>.agent.md` mit YAML-Frontmatter (`name`, `description`).
 
-<table>
-<tr>
-<th width="50%">DE Was ist das?</th>
-<th width="50%">EN What is it?</th>
-</tr>
-<tr>
-<td>Der Skill stellt <strong>drei strukturierte Entwicklungsprompts</strong> bereit: (1) Tiefenanalyse und kritische Projektbewertung, (2) Marketing und UX/UI Rework, (3) Anforderungsdokument mit verbindlicher 9-Kapitel-Struktur (Zusammenfassung, Marktanalyse, Wettbewerb, Zielgruppe, Nutzen, Abhängigkeiten, Anforderungen V1, Chancen/Risiken, Umsetzungsplan + Quellenverzeichnis). <strong>Ausschließlich Web/SaaS - keine mobilen Apps. Nur Quellen nicht älter als 1 Jahr.</strong> IDEA.md ausfüllen, Prompt aus <code>@anforderungsdokument</code> kopieren, .docx generieren, zur Freigabe einreichen.</td>
-<td>The skill provides <strong>three structured development prompts</strong>: (1) deep analysis and critical assessment, (2) marketing and UX/UI rework, (3) requirements document with a mandatory 9-chapter structure (summary, market analysis, competition, target audience, benefits, dependencies, requirements V1, opportunities/risks, implementation plan + references). <strong>Web/SaaS only - no mobile apps. Sources not older than 1 year only.</strong> Fill in IDEA.md, copy prompt from <code>@anforderungsdokument</code>, generate .docx, submit for approval.</td>
-</tr>
-</table>
+### Wenn ein Agent schlecht antwortet
 
----
-
-## Empfohlener Workflow / Recommended Workflow
-
-<table>
-<tr>
-<th width="50%">DE Schritt</th>
-<th width="50%">EN Step</th>
-</tr>
-<tr>
-<td><strong>Phase 0 - Anforderungen (neues Projekt):</strong><br>
-1. <code>IDEA.md</code> im Projekt-Root ausfüllen<br>
-2. <strong><code>@anforderungsdokument</code></strong> aufrufen: Prompt kopieren und senden<br>
-3. Dokument prüfen und zur Freigabe einreichen<br>
-4. Nach Freigabe: Implementierung starten</td>
-<td><strong>Phase 0 - Requirements (new project):</strong><br>
-1. Fill in <code>IDEA.md</code> in the project root<br>
-2. Call <strong><code>@anforderungsdokument</code></strong>: copy prompt and send<br>
-3. Review document and submit for approval<br>
-4. After approval: start implementation</td>
-</tr>
-<tr>
-<td><strong>Phase 1 - Planung:</strong><br>
-<strong><code>@planner</code></strong> - Aufgabe analysieren und Implementierungsplan erstellen</td>
-<td><strong>Phase 1 - Planning:</strong><br>
-<strong><code>@planner</code></strong> - Analyse the task and create an implementation plan</td>
-</tr>
-<tr>
-<td><strong>Phase 2 - Implementierung:</strong><br>
-<strong><code>@developer</code></strong> - Plan entgegennehmen und schrittweise implementieren</td>
-<td><strong>Phase 2 - Implementation:</strong><br>
-<strong><code>@developer</code></strong> - Receive plan and implement step by step</td>
-</tr>
-<tr>
-<td><strong>Phase 3 - Qualitätsprüfung:</strong><br>
-<strong><code>@reviewer</code></strong> - Code prüfen, bevor ein PR erstellt wird</td>
-<td><strong>Phase 3 - Quality review:</strong><br>
-<strong><code>@reviewer</code></strong> - Review code before creating a PR</td>
-</tr>
-</table>
-
----
-
-## Eigene Agents erstellen / Creating Custom Agents
-
-<table>
-<tr>
-<th width="50%">DE Anleitung</th>
-<th width="50%">EN Guide</th>
-</tr>
-<tr>
-<td>Erstelle eine <code>.agent.md</code>-Datei in <code>.github/agents/</code> mit YAML-Frontmatter. Definiere Rolle, Workflow und Regeln.</td>
-<td>Create a <code>.agent.md</code> file in <code>.github/agents/</code> with YAML frontmatter. Define role, workflow, and rules.</td>
-</tr>
-</table>
-
-```yaml
----
-name: MyAgent
-description: >
-  Description of what this agent does.
----
-# Agent: MyAgent
-
-## Role
-...
-
-## Workflow
-...
-```
-
----
-
-## Wenn ein Agent schlecht antwortet / When an Agent Responds Poorly
-
-<table>
-<tr>
-<th width="50%">DE Problem & Lösung</th>
-<th width="50%">EN Problem & Solution</th>
-</tr>
-<tr>
-<td><strong>Agent ignoriert Regeln aus der Instructions-Datei</strong><br>→ Prüfe das <code>applyTo</code>-Glob-Muster - stimmt es mit der Datei überein, die du bearbeitest? Teste mit: <code>**/*.ts</code> statt <code>src/**/*.ts</code></td>
-<td><strong>Agent ignores rules from an Instructions file</strong><br>→ Check the <code>applyTo</code> glob pattern - does it match the file you are editing? Try broader patterns: <code>**/*.ts</code> instead of <code>src/**/*.ts</code></td>
-</tr>
-<tr>
-<td><strong>Agent befolgt den Workflow nicht (z. B. überspringt typecheck)</strong><br>→ Öffne die <code>.agent.md</code>-Datei und mache die Anweisung strikter. Ersetze "sollte" durch "muss". Füge am Ende eine Zusammenfassung hinzu: <em>"Bevor du antwortest, liste alle abgeschlossenen Schritte auf."</em></td>
-<td><strong>Agent does not follow the workflow (e.g. skips typecheck)</strong><br>→ Open the <code>.agent.md</code> file and make the instruction stricter. Replace "should" with "must". Add a reminder at the end: <em>"Before responding, list all completed steps."</em></td>
-</tr>
-<tr>
-<td><strong>Agent schreibt schlechten Next.js-Code (z. B. falsche API-Nutzung)</strong><br>→ Füge ein konkretes Beispiel in die <code>nextjs.instructions.md</code> ein. Copilot folgt Beispielen besser als abstrakten Regeln.</td>
-<td><strong>Agent writes bad Next.js code (e.g. wrong API usage)</strong><br>→ Add a concrete code example to <code>nextjs.instructions.md</code>. Copilot follows examples better than abstract rules.</td>
-</tr>
-<tr>
-<td><strong>Agent "vergisst" den Kontext nach langen Gesprächen</strong><br>→ Starte ein neues Chat-Fenster. Langer Kontext verdrängt Instructions. Übergib den Plan explizit: <em>"Hier ist der Plan: [Plan]. Bitte implementiere Schritt 3."</em></td>
-<td><strong>Agent "forgets" context after long conversations</strong><br>→ Start a new chat window. Long context pushes out instructions. Pass the plan explicitly: <em>"Here is the plan: [plan]. Please implement step 3."</em></td>
-</tr>
-<tr>
-<td><strong>Agent antwortet auf Englisch statt Deutsch (oder umgekehrt)</strong><br>→ Füge in <code>copilot-instructions.md</code> eine Sprachanweisung hinzu: <em>"Antworte immer auf Deutsch."</em> - oder sprich den Agent in der gewünschten Sprache an.</td>
-<td><strong>Agent responds in German instead of English (or vice versa)</strong><br>→ Add a language instruction to <code>copilot-instructions.md</code>: <em>"Always respond in English."</em> - or address the agent in your preferred language.</td>
-</tr>
-<tr>
-<td><strong>Agent überschreitet den Plan / macht ungebetene Änderungen</strong><br>→ Füge in der <code>.agent.md</code> unter "Rules" hinzu: <em>"Ändere nur Dateien, die explizit im Plan genannt sind. Keine ungebetenen Refactors."</em></td>
-<td><strong>Agent exceeds the plan / makes unrequested changes</strong><br>→ Add to the <code>.agent.md</code> under "Rules": <em>"Only modify files explicitly listed in the plan. No unrequested refactoring."</em></td>
-</tr>
-</table>
+- Instructions-Glob-Muster prüfen (`**/*.ts` statt `src/**/*.ts`).
+- Anweisungen in `.agent.md` strenger formulieren ("sollte" → "muss").
+- Konkrete Code-Beispiele in `nextjs.instructions.md` ergänzen.
+- Bei langen Chats neuen Chat starten und Plan explizit übergeben.
+- Sprache in `copilot-instructions.md` festlegen, falls nötig.
+- Regel hinzufügen: "Ändere nur Dateien, die explizit im Plan genannt sind. Keine ungebetenen Refactors."
 
 ---
 
 ## Referenzen / References
 
 - [GitHub Copilot Customisation Docs](https://docs.github.com/en/copilot/customizing-copilot)
-- [awesome-copilot](https://github.com/github/awesome-copilot) - Beispiele und Best Practices / Examples and best practices
+- [awesome-copilot](https://github.com/github/awesome-copilot) — Beispiele und Best Practices / Examples and best practices
