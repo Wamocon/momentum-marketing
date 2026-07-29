@@ -86,8 +86,35 @@ async function checkTable(table, columns) {
   return { table, ok: missing.length === 0, missing };
 }
 
+/**
+ * Environment variables the server needs at runtime. A missing signing secret
+ * does not break the build, so it only shows up as failed logins in production.
+ */
+function checkEnv() {
+  const problems = [];
+  const secret = process.env.MOMENTUM_AUTH_SECRET;
+  if (!secret) {
+    problems.push('MOMENTUM_AUTH_SECRET is not set. Login and session verification will fail in production.');
+  } else if (secret.length < 32) {
+    problems.push(`MOMENTUM_AUTH_SECRET is only ${secret.length} characters; at least 32 are required.`);
+  }
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    problems.push('SUPABASE_SERVICE_ROLE_KEY is not set. Registration and login route handlers will fail.');
+  }
+  if (!process.env.NEXT_PUBLIC_SUPABASE_SCHEMA) {
+    problems.push('NEXT_PUBLIC_SUPABASE_SCHEMA is not set; the app will silently fall back to "public".');
+  }
+  return problems;
+}
+
 async function run() {
-  console.log(`\nSchema preflight against ${url} (schema: ${schema})\n`);
+  console.log(`\nPreflight against ${url} (schema: ${schema})\n`);
+
+  const envProblems = checkEnv();
+  for (const problem of envProblems) {
+    console.log(`  ENV     ${problem}`);
+  }
+  if (envProblems.length) console.log('');
 
   const results = [];
   for (const [table, columns] of Object.entries(REQUIRED)) {
@@ -114,8 +141,12 @@ async function run() {
     console.log('\nSchema drift detected. Apply the pending migrations in supabase/migrations/ before deploying.\n');
     process.exit(1);
   }
+  if (envProblems.length) {
+    console.log('\nSchema is correct, but the environment is incomplete. Fix the ENV items above before deploying.\n');
+    process.exit(1);
+  }
 
-  console.log('\nSchema matches what the application expects.\n');
+  console.log('\nSchema and environment both match what the application expects.\n');
 }
 
 run().catch(err => {

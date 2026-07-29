@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '../../../../src/lib/supabase';
-import { hashPassword, createToken, toSafeUser } from '../../../../src/lib/serverAuth';
+import { hashPassword, toSafeUser } from '../../../../src/lib/serverAuth';
 import { describeDbError, isSchemaOutOfDateError, isUniqueViolation } from '../../../../src/lib/dbDiagnostics';
 
 /** The schema is chosen at runtime, so derive the client type instead of pinning it. */
@@ -206,10 +206,12 @@ export async function POST(request: Request) {
       return failure(refreshError, 'user_refresh');
     }
 
-    const token = await createToken({ userId: refreshedUser.id, email: refreshedUser.email });
+    // Deliberately no session token here. A new account is created inactive and
+    // must be approved by an admin before it can sign in, so a JWT would be
+    // unusable. Minting one only added a way for registration to fail.
     const safeUser = toSafeUser(refreshedUser);
 
-    return NextResponse.json({ user: safeUser, token }, { status: 201 });
+    return NextResponse.json({ user: safeUser }, { status: 201 });
   } catch (err) {
     await rollback(supabase, created);
     console.error('Register error:', err);

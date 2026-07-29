@@ -8,6 +8,24 @@ const COOKIE_NAME = 'momentum_session';
 const DEV_FALLBACK_SECRET = 'momentum-local-dev-secret-min-32-chars-long!!';
 const MIN_SECRET_LENGTH = 32;
 
+/** Thrown when production is missing a usable signing secret. */
+export class MissingAuthSecretError extends Error {
+  readonly code = 'auth_secret_missing';
+  constructor() {
+    super(
+      `MOMENTUM_AUTH_SECRET is missing or shorter than ${MIN_SECRET_LENGTH} characters. ` +
+      'Set it in the deployment environment (Vercel: Settings > Environment Variables) ' +
+      'and redeploy. Sessions cannot be issued or verified until it is set.',
+    );
+    this.name = 'MissingAuthSecretError';
+  }
+}
+
+export function isAuthSecretConfigured(): boolean {
+  if (process.env.NODE_ENV !== 'production') return true;
+  return Boolean(JWT_SECRET && JWT_SECRET.length >= MIN_SECRET_LENGTH);
+}
+
 /**
  * The dev fallback below is committed to this repository, so anyone could sign
  * a valid momentum_session cookie for any user (including a super-admin) if it
@@ -17,10 +35,7 @@ const MIN_SECRET_LENGTH = 32;
 function getSecret(): Uint8Array {
   if (process.env.NODE_ENV === 'production') {
     if (!JWT_SECRET || JWT_SECRET.length < MIN_SECRET_LENGTH) {
-      throw new Error(
-        `MOMENTUM_AUTH_SECRET is missing or shorter than ${MIN_SECRET_LENGTH} characters. ` +
-        'Set it in the deployment environment before serving authenticated traffic.',
-      );
+      throw new MissingAuthSecretError();
     }
     return new TextEncoder().encode(JWT_SECRET);
   }

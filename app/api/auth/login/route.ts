@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '../../../../src/lib/supabase';
-import { hashPassword, verifyPassword, createToken, toSafeUser, setAuthCookie } from '../../../../src/lib/serverAuth';
+import { hashPassword, verifyPassword, createToken, toSafeUser, setAuthCookie, isAuthSecretConfigured } from '../../../../src/lib/serverAuth';
 
 export async function POST(request: Request) {
   try {
@@ -10,6 +10,16 @@ export async function POST(request: Request) {
 
     if (!email || !password) {
       return NextResponse.json({ error: 'E-Mail und Passwort erforderlich.' }, { status: 400 });
+    }
+
+    // Fail before checking credentials, so the cause is unambiguous in the logs
+    // instead of surfacing as a generic 500 after a successful password check.
+    if (!isAuthSecretConfigured()) {
+      console.error('Login blocked: MOMENTUM_AUTH_SECRET is not configured in this environment.');
+      return NextResponse.json(
+        { error: 'Anmeldung ist derzeit nicht moeglich. Die Server-Konfiguration ist unvollstaendig.', code: 'auth_secret_missing' },
+        { status: 503 },
+      );
     }
 
     const supabase = createServiceClient();
